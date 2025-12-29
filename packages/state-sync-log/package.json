@@ -1,0 +1,78 @@
+{
+  "name": "state-sync-log",
+  "version": "0.0.1",
+  "description": "State synchronization log for collaborative applications.",
+  "keywords": [
+    "state-sync",
+    "collaboration",
+    "crdt",
+    "log"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/xaviergonz/state-sync-log.git"
+  },
+  "bugs": {
+    "url": "https://github.com/xaviergonz/state-sync-log/issues"
+  },
+  "license": "MIT",
+  "author": "Javier González Garcés",
+  "source": "./src/index.ts",
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "script": "./dist/state-sync-log.umd.js",
+      "import": "./dist/state-sync-log.esm.mjs",
+      "require": "./dist/state-sync-log.umd.js",
+      "default": "./dist/state-sync-log.esm.mjs"
+    }
+  },
+  "esmodule": "./dist/state-sync-log.esm.js",
+  "module": "./dist/state-sync-log.esm.js",
+  "jsnext:main": "./dist/state-sync-log.esm.js",
+  "react-native": "./dist/state-sync-log.umd.js",
+  "umd:main": "./dist/state-sync-log.umd.js",
+  "unpkg": "./dist/state-sync-log.umd.js",
+  "jsdelivr": "./dist/state-sync-log.umd.js",
+  "main": "./dist/state-sync-log.umd.js",
+  "types": "./dist/types/index.d.ts",
+  "typings": "./dist/types/index.d.ts",
+  "sideEffects": false,
+  "files": [
+    "src",
+    "dist",
+    "LICENSE",
+    "CHANGELOG.md",
+    "README.md"
+  ],
+  "scripts": {
+    "quick-build": "tsc",
+    "quick-build-tests": "tsc -p test",
+    "copy-root-files": "shx cp ../../README.md . && shx cp ../../LICENSE . && shx cp ../../CHANGELOG.md .",
+    "build": "pnpm quick-build && pnpm copy-root-files && shx rm -rf dist && vite build && shx cp dist/state-sync-log.esm.mjs dist/state-sync-log.esm.js",
+    "test": "vitest run",
+    "test:ci": "vitest run --coverage",
+    "build-docs": "shx rm -rf api-docs && typedoc --options ./typedocconfig.js src/index.ts"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^4.0.15",
+    "shx": "^0.4.0",
+    "ts-node": "^10.9.2",
+    "typedoc": "^0.28.15",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.6",
+    "vite-plugin-dts": "^4.5.4",
+    "vitest": "^4.0.15",
+    "yjs": "^13.6.27"
+  },
+  "peerDependencies": {
+    "yjs": "^13.0.0"
+  },
+  "dependencies": {
+    "tslib": "^2.8.1"
+  },
+  "directories": {
+    "test": "test"
+  }
+}

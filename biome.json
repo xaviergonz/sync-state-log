@@ -1,0 +1,101 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.3.10/schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true, "defaultBranch": "master" },
+  "files": {
+    "includes": [
+      "**",
+      "!**/node_modules",
+      "!**/dist",
+      "!packages/state-sync-log/coverage",
+      "!packages/state-sync-log/api-docs"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "useEditorconfig": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineEnding": "lf",
+    "lineWidth": 100
+  },
+  "assist": { "actions": { "source": { "organizeImports": "on" } } },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "a11y": { "useKeyWithClickEvents": "off" },
+      "complexity": {
+        "noBannedTypes": "off",
+        "noExcessiveCognitiveComplexity": "off",
+        "noForEach": "off",
+        "noUselessThisAlias": "off",
+        "noVoid": "off",
+        "noArguments": "off"
+      },
+      "correctness": {
+        "noUndeclaredDependencies": "off",
+        "useImportExtensions": "off"
+      },
+      "performance": {
+        "noBarrelFile": "off",
+        "noReExportAll": "off",
+        "noNamespaceImport": "off"
+      },
+      "security": {},
+      "style": {
+        "noDefaultExport": "off",
+        "noNonNullAssertion": "off",
+        "noParameterAssign": "off",
+        "noParameterProperties": "off",
+        "noUnusedTemplateLiteral": "off",
+        "noUselessElse": "off",
+        "useConsistentArrayType": "off",
+        "useFilenamingConvention": "off",
+        "useForOf": "off",
+        "useImportType": "off",
+        "useNamingConvention": "off",
+        "useTemplate": "off",
+        "useAsConstAssertion": "error",
+        "useDefaultParameterLast": "error",
+        "useEnumInitializers": "error",
+        "useSelfClosingElements": "error",
+        "useSingleVarDeclarator": "error",
+        "useNumberNamespace": "error",
+        "noInferrableTypes": "error"
+      },
+      "suspicious": {
+        "noArrayIndexKey": "off",
+        "noAssignInExpressions": "off",
+        "noConfusingVoidType": "off",
+        "noConsole": "off",
+        "noEmptyBlockStatements": "off",
+        "noEmptyInterface": "off",
+        "noExplicitAny": "off",
+        "noMisplacedAssertion": "off",
+        "noReactSpecificProps": "off"
+      }
+    },
+    "includes": [
+      "**/packages/state-sync-log/src/**/*.ts",
+      "**/packages/state-sync-log/test/**/*.ts"
+    ]
+  },
+  "javascript": {
+    "formatter": {
+      "trailingCommas": "es5",
+      "semicolons": "asNeeded"
+    },
+    "globals": [
+      "afterEach",
+      "beforeEach",
+      "describe",
+      "expect",
+      "it",
+      "vi",
+      "test",
+      "fail",
+      "arguments",
+      "ReadonlySetLike"
+    ]
+  }
+}

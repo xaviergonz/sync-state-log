@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+  workflow_dispatch:
+
+jobs:
+  lib-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+
+      - run: pnpm install
+      - run: pnpm lib:build
+
+  lib-test:
+    name: lib-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+
+      - run: pnpm install
+      - run: pnpm lib:test:ci
+
+      - uses: codecov/codecov-action@v5
+        name: Upload codecov report
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          directory: ./packages/state-sync-log/coverage
+          fail_ci_if_error: true
+
