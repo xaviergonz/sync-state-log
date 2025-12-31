@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 import * as Y from "yjs"
-import { createStateSyncLog } from "../src/index"
+import { createStateSyncLog, getSortedTxsSymbol } from "../src/createStateSyncLog"
 
 describe("Controller API", () => {
   it("initializes with empty state", () => {
@@ -81,6 +81,7 @@ describe("Controller API", () => {
     expect(() => log.getActiveEpochTxCount()).toThrow(errMsg)
     expect(() => log.getActiveEpochStartTime()).toThrow(errMsg)
     expect(() => log.isLogEmpty()).toThrow(errMsg)
+    expect(() => log[getSortedTxsSymbol]()).toThrow(errMsg)
   })
 
   it("tracks getActiveEpochTxCount correctly", () => {

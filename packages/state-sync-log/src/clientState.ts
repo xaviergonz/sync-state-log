@@ -23,11 +23,16 @@ export interface ClientState {
   // Cached finalized epoch (null = not yet initialized, recalculated only when checkpoint map changes)
   cachedFinalizedEpoch: number | null
 
-  // Sorted transaction cache (ALL transactions, kept sorted)
+  // Sorted transaction cache (ALL active/future transactions, kept sorted).
+  // Contains ONLY current (>= activeEpoch) or future transactions.
+  // Past epochs are physically pruned during syncLog and updateState.
   sortedTxKeys: TransactionTimestampKey[]
   sortedTxKeysSet: Set<TransactionTimestampKey> // O(1) existence check
 
-  // Applied transactions (subset of sortedTxKeys)
+  // Applied transactions (subset of sortedTxKeys).
+  // Tracks which physical transactions have already been integrated into the current `cachedState`.
+  // - Enables incremental updates by identifying truly new transactions (Fast Path).
+  // - Enables deduplication against logical duplicates (re-emits) from previous updates.
   appliedTxKeys: Set<TransactionTimestampKey>
 
   // Track last applied timestamp for out-of-order detection
@@ -74,8 +79,6 @@ export function insertIntoSortedCache(
   clientState: ClientState,
   key: TransactionTimestampKey
 ): boolean {
-  if (clientState.sortedTxKeysSet.has(key)) return false // Already exists
-
   const ts = parseTransactionTimestampKey(key)
 
   // Update max seen clock from all observed traffic
@@ -126,10 +129,8 @@ export function removeFromSortedCache(
   clientState: ClientState,
   key: TransactionTimestampKey
 ): void {
-  if (!clientState.sortedTxKeysSet.has(key)) return // O(1) early exit
-
   clientState.sortedTxKeysSet.delete(key)
-  clientState.appliedTxKeys.delete(key) // Also remove from applied
+  // DO NOT remove from applied here. Managed by updateState.
 
   // Search from start (most common case: oldest tx being removed)
   for (let i = 0; i < clientState.sortedTxKeys.length; i++) {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
-import { createStateSyncLog } from "../src/index"
+import { createStateSyncLog, getSortedTxsSymbol } from "../src/createStateSyncLog"
 
 describe("Sync", () => {
   it("syncs between two clients", async () => {
@@ -122,5 +122,107 @@ describe("Sync", () => {
     // Both should have identical state
     expect(logA.getState()).toStrictEqual(logB.getState())
     expect(logB.getState().order).toStrictEqual([1, 2, 3])
+  })
+
+  describe("Advanced Sync Scenarios", () => {
+    it("prunes redundant re-emits when switching to a better checkpoint", () => {
+      const docA = new Y.Doc()
+      const docB = new Y.Doc()
+      const logA = createStateSyncLog<any>({
+        yDoc: docA,
+        clientId: "A",
+        retentionWindowMs: undefined,
+      })
+      const logB = createStateSyncLog<any>({
+        yDoc: docB,
+        clientId: "B",
+        retentionWindowMs: undefined,
+      })
+
+      // 1. B creates checkpoint (Epoch 0 -> 1) early, so it misses A's future events.
+      // We emit a dummy transaction to ensure the epoch is not empty, otherwise compact() is a no-op.
+      logB.emit([{ kind: "set", path: [], key: "setup", value: "init" }])
+      logB.compact()
+
+      // 2. A emits T1 (Epoch 1).
+      logA.emit([{ kind: "set", path: [], key: "a", value: 1 }])
+
+      // 3. Sync A -> B.
+      // B receives T1.
+      // B has CP_B (Epoch 1, Watermarks empty).
+      // B sees T1 (Epoch 1). T1 <= Finalized.
+      // T1 not in CP_B.
+      // B re-emits T1 -> T1b (Epoch 2).
+      const stateA = Y.encodeStateAsUpdate(docA)
+      Y.applyUpdate(docB, stateA)
+
+      // Verification: B should have re-emitted T1.
+      const txsB = logB[getSortedTxsSymbol]()
+      expect(txsB.length).toBe(1)
+      expect(txsB[0].tx.originalTxKey).toBeDefined() // It's a re-emit
+
+      // 4. A creates checkpoint (Epoch 0 -> 1). T1 is in CP_A (Epoch 1).
+      // A prunes T1 from yTx.
+      logA.compact()
+
+      // 5. Sync B -> A (receives T1b).
+      // A receives T1b (Epoch 2).
+      // A has CP_A (Epoch 1, Watermark A=1). Finalized 1.
+      // A runs syncLog.
+      // T1b (Epoch 2) is "active" relative to A (Epoch 2).
+      // Logic "Redundant re-emit":
+      // T1b.orig = T1.
+      // T1 in CP_A? Yes.
+      // T1b pruned.
+      const stateB = Y.encodeStateAsUpdate(docB)
+      Y.applyUpdate(docA, stateB)
+
+      // Verification: A should have pruned T1b.
+      expect(logA.getActiveEpochTxCount()).toStrictEqual(0)
+    })
+
+    it("deduplicates re-emits correctly", () => {
+      const docA = new Y.Doc()
+      const logA = createStateSyncLog<any>({
+        yDoc: docA,
+        clientId: "A",
+        retentionWindowMs: undefined,
+      })
+      logA.emit([{ kind: "set", path: [], key: "arr", value: [] }])
+
+      const docB = new Y.Doc()
+      const logB = createStateSyncLog<any>({
+        yDoc: docB,
+        clientId: "B",
+        retentionWindowMs: undefined,
+      })
+
+      // Sync init state
+      const init = Y.encodeStateAsUpdate(docA)
+      Y.applyUpdate(docB, init)
+
+      // A emits T1 (push 1)
+      logA.emit([{ kind: "splice", path: ["arr"], index: 0, deleteCount: 0, inserts: [1] }])
+
+      // B compact (Epoch 0->1). Missed T1.
+      logB.compact()
+
+      // B receives T1. Re-emits T1_B.
+      const updateT1 = Y.encodeStateAsUpdate(docA)
+      Y.applyUpdate(docB, updateT1)
+
+      const txsB = logB[getSortedTxsSymbol]()
+      expect(txsB.length).toBe(1) // T1_B (init tx was pruned by compact)
+      expect(txsB[0].tx.originalTxKey).toBeDefined() // T1_B is a re-emit
+
+      // A receives T1_B.
+      const updateB = Y.encodeStateAsUpdate(docB)
+      Y.applyUpdate(docA, updateB)
+
+      // A has T1 (applied).
+      // A receives T1_B. Deduplicates against T1.
+      const arr = logA.getState().arr as number[]
+      expect(arr.length).toBe(1)
+    })
   })
 })

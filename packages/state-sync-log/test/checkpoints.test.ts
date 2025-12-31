@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
-import { createStateSyncLog } from "../src/index"
+import { CheckpointRecord, parseCheckpointKey } from "../src/checkpoints"
+import { createStateSyncLog, getSortedTxsSymbol } from "../src/createStateSyncLog"
 
 describe("Checkpoints", () => {
   it("compacts epoch and maintains state", () => {
@@ -87,6 +88,39 @@ describe("Checkpoints", () => {
     log.emit([{ kind: "set", path: [], key: "after", value: 2 }])
 
     expect(log.getActiveEpoch()).toBe(epochAfterCompact)
+    // State should have both (old was in checkpoint, new is fresh)
     expect(log.getState()).toStrictEqual({ before: 1, after: 2 })
+  })
+
+  it("throws on malformed checkpoint key", () => {
+    expect(() => parseCheckpointKey("invalid")).toThrow(/Malformed checkpoint key/)
+    expect(() => parseCheckpointKey("1;2")).toThrow(/Malformed checkpoint key/)
+  })
+
+  it("includes active transactions in checkpoint", () => {
+    const doc = new Y.Doc()
+
+    const log = createStateSyncLog<any>({
+      yDoc: doc,
+      clientId: "A",
+      retentionWindowMs: 1000,
+    })
+
+    // Access internal map for checkpoint verification (no public API for watermarks yet)
+    const yCheckpoint = doc.getMap<CheckpointRecord>("state-sync-log-checkpoint")
+
+    // Add a transaction in epoch 1
+    log.emit([])
+
+    // Verify transaction exists before compact
+    expect(log[getSortedTxsSymbol]().length).toBe(1)
+
+    // Compact (creates checkpoint for epoch 1 and prunes transactions)
+    log.compact()
+
+    // Checkpoint should be created
+    expect(yCheckpoint.size).toBe(1)
+    // The transaction should have been pruned
+    expect(log[getSortedTxsSymbol]().length).toBe(0)
   })
 })

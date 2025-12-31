@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
 import { createStateSyncLog } from "../src/index"
+import { applyTransaction, Op } from "../src/operations"
+import {
+  compareTransactionTimestamps,
+  parseTransactionTimestampKey,
+} from "../src/transactionTimestamp"
 
 describe("Operations", () => {
   it("handles basic set operations", () => {
@@ -179,5 +184,30 @@ describe("Operations", () => {
     log.emit([{ kind: "deleteFromSet", path: ["arr"], value: "nonexistent" }])
 
     expect(log.getState().arr).toStrictEqual(["a", "b", "c"])
+  })
+
+  it("throws on malformed timestamp key", () => {
+    expect(() => parseTransactionTimestampKey("invalid")).toThrow(/Malformed timestamp key/)
+  })
+
+  it("compares identical timestamps correctly", () => {
+    const ts = { epoch: 1, clock: 1, clientId: "A", wallClock: 100 }
+    expect(compareTransactionTimestamps(ts, ts)).toBe(0)
+  })
+
+  it("throws on resolvePath out of bounds array access", () => {
+    const state = { arr: [] }
+    const op: Op = { kind: "set", path: ["arr", 100], key: "0", value: 1 }
+    // applyTransaction catches errors and returns original state
+    const newState = applyTransaction(state, [op])
+    expect(newState).toBe(state) // Failed to apply
+  })
+
+  it("throws on resolvePath invalid path types", () => {
+    // Path segment string on array
+    const state = { arr: [1] }
+    const op: Op = { kind: "set", path: ["arr", "invalid"], key: "0", value: 1 }
+    const newState = applyTransaction(state, [op])
+    expect(newState).toBe(state)
   })
 })

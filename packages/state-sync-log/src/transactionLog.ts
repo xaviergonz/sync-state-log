@@ -172,8 +172,6 @@ function computeFullState(yTx: Y.Map<TxRecord>, clientState: ClientState): JSONO
   for (const key of clientState.sortedTxKeys) {
     clientState.appliedTxKeys.add(key)
   }
-  clientState.sortedTxKeys = []
-  clientState.sortedTxKeysSet.clear()
 
   clientState.cachedState = state
   return state
@@ -269,19 +267,23 @@ export function updateState(
     return handleFullRecompute(yTx, clientState)
   }
 
-  // Apply all pending transactions (they're already sorted)
+  // Apply pending transactions (those not in the current snapshot)
   let state = clientState.cachedState as JSONObject
   const localSeen = new Set<string>()
   const toApply = [...clientState.sortedTxKeys]
   const appliedOps: Op[] = []
 
   for (const key of toApply) {
+    // If already in snapshot, skip
+    if (clientState.appliedTxKeys.has(key)) continue
+
     const tx = yTx.get(key)
     if (!tx) continue
 
     const dedupKey = tx.originalTxKey ?? key
-    if (localSeen.has(dedupKey)) {
-      removeFromSortedCache(clientState, key)
+    if (localSeen.has(dedupKey) || clientState.appliedTxKeys.has(dedupKey)) {
+      // Mark as handled even if skipped
+      clientState.appliedTxKeys.add(key)
       continue
     }
     localSeen.add(dedupKey)
@@ -292,7 +294,6 @@ export function updateState(
       appliedOps.push(...tx.ops)
     }
 
-    removeFromSortedCache(clientState, key)
     clientState.appliedTxKeys.add(key)
     clientState.lastAppliedTs = parseTransactionTimestampKey(key)
   }

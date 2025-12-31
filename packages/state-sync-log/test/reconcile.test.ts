@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import * as Y from "yjs"
 import { createStateSyncLog } from "../src/index"
+import { computeReconcileOps } from "../src/reconcile"
 
 describe("Reconcile", () => {
   it("reconciles state via diffs", () => {
@@ -107,5 +108,22 @@ describe("Reconcile", () => {
     log.reconcileState(state)
     expect(log.getState()).toStrictEqual(state)
     expect(spy).toHaveBeenCalledTimes(1) // Still only 1 call
+  })
+
+  it("handles changing root type (should fail)", () => {
+    // This hits emitReplace with empty path
+    const current = { a: 1 }
+    const target = [1]
+
+    // computeReconcileOps catches this? No, it pushes ops.
+    // emitReplace calls failure in this case.
+    // So computeReconcileOps should revert/throw.
+    expect(() => computeReconcileOps(current, target)).toThrow(/Cannot replace root state directly/)
+  })
+
+  it("short-circuits on identical object reference", () => {
+    const obj = { a: 1 }
+    const ops = computeReconcileOps(obj, obj)
+    expect(ops).toStrictEqual([])
   })
 })

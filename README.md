@@ -28,25 +28,21 @@
 
 Tools like Yjs and Automerge are amazing for text editing because **they never reject a change**—they just merge everything.
 
-But for **business applications**, "merging everything" is often a bug.
-
-- ❌ **Inventory:** Two users buy the last item at the same time. A standard CRDT lets both buy it (stock = -1).
-- ❌ **Kanban Board:** You have a "WIP Limit" of 3 tasks. Users drag two tasks in at once. Now you have 4.
-- ❌ **Forms:** A user submits an invalid field value. The CRDT happily syncs it to everyone.
+But for **business applications**, most often than not we have rules where "merging everything" can result in a bug. For example, if you have a "WIP Limit" of 3 tasks in a Kanban board and users drag two tasks in at once, you end up with 4 tasks.
 
 ## The Solution: state-sync-log
 
-`state-sync-log` is a **Validated Replicated State Machine**. It uses the same robust technology as Yjs (networking, offline support), but it fundamentally changes the rules:
+`state-sync-log` is a **Validated Replicated State Machine**. It uses the same robust technology as Yjs in its core (networking, offline support), but it fundamentally changes the rules:
 
 **Every transaction is validated against your business logic before it is applied.**
 
-If a peer sends an invalid transaction (e.g., buying out-of-stock items), your clients **reject it strictly and deterministically**.
+If a peer sends an invalid transaction your clients **reject it strictly and deterministically**, even when the change itself was made while offline.
 
 ### Comparison
 
 | Feature | state-sync-log | Standard CRDTs (Yjs, Automerge) |
 | :--- | :---: | :---: |
-| **Conflict Strategy** | 🛑 **Reject Invalid Changes** | 🔀 **Merge Everything** |
+| **Conflict Strategy** | 🫸 **Reject Invalid Changes** | 🔀 **Merge Everything** |
 | **Data Model** | Plain JSON | Specialized Types (Y.Map, Y.Array) |
 | **Validation** | ✅ First-class citizen | ❌ Not possible (by design) |
 | **Best For** | Business logic, Forms, Games, CRUD, Complex editors | Text editing, Drawing, Notes |

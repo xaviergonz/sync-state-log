@@ -11,6 +11,13 @@ import { appendTransaction, TxKeyChanges, TxRecord, updateState } from "./transa
 import { parseTransactionTimestampKey, TransactionTimestampKey } from "./transactionTimestamp"
 import { generateID } from "./utils"
 
+export const getSortedTxsSymbol = Symbol("getSortedTxs")
+
+export type SortedTxInfo = {
+  key: TransactionTimestampKey
+  tx: TxRecord
+}
+
 export interface StateSyncLogOptions<State extends JSONObject> {
   /**
    * The Y.js Document to bind to.
@@ -112,6 +119,11 @@ export interface StateSyncLogController<State extends JSONObject> {
    * Returns true if the log is completely empty.
    */
   isLogEmpty(): boolean
+
+  /**
+   * Internal/Testing: Returns all transactions currently in the log, sorted.
+   */
+  [getSortedTxsSymbol](): SortedTxInfo[]
 }
 
 /**
@@ -280,11 +292,17 @@ export function createStateSyncLog<State extends JSONObject>(
 
     getActiveEpochTxCount(): number {
       assertNotDisposed()
-      let count = 0
       const activeEpoch = getActiveEpochInternal()
-      for (const key of yTx.keys()) {
+      let count = 0
+      // Only current or future epochs exist in sortedTxKeys (past epochs are pruned during updateState).
+      // Future epochs appear if we receive transactions before the corresponding checkpoint.
+      for (const key of clientState.sortedTxKeys) {
         const ts = parseTransactionTimestampKey(key)
-        if (ts.epoch === activeEpoch) count++
+        if (ts.epoch === activeEpoch) {
+          count++
+        } else if (ts.epoch > activeEpoch) {
+          break // Optimization: sorted order means we can stop early
+        }
       }
       return count
     },
@@ -292,21 +310,29 @@ export function createStateSyncLog<State extends JSONObject>(
     getActiveEpochStartTime(): number | undefined {
       assertNotDisposed()
       const activeEpoch = getActiveEpochInternal()
-      let min: number | undefined
-      for (const key of yTx.keys()) {
+      // Only current or future epochs exist in sortedTxKeys (past epochs are pruned during updateState).
+      for (const key of clientState.sortedTxKeys) {
         const ts = parseTransactionTimestampKey(key)
         if (ts.epoch === activeEpoch) {
-          if (min === undefined || ts.wallClock < min) {
-            min = ts.wallClock
-          }
+          return ts.wallClock
+        } else if (ts.epoch > activeEpoch) {
+          break // Optimization: sorted order means we can stop early
         }
       }
-      return min
+      return undefined
     },
 
     isLogEmpty(): boolean {
       assertNotDisposed()
       return yTx.size === 0 && yCheckpoint.size === 0
+    },
+
+    [getSortedTxsSymbol](): SortedTxInfo[] {
+      assertNotDisposed()
+      return clientState.sortedTxKeys.map((key) => ({
+        key,
+        tx: yTx.get(key)!,
+      }))
     },
   }
 }

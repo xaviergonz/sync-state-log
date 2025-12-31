@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import * as Y from "yjs"
-import { createStateSyncLog } from "../src/index"
+import { CheckpointRecord, parseCheckpointKey } from "../src/checkpoints"
+import { createStateSyncLog, getSortedTxsSymbol } from "../src/createStateSyncLog"
 
 describe("Retention Window", () => {
   const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000
@@ -48,8 +49,9 @@ describe("Retention Window", () => {
       retentionWindowMs: ONE_WEEK_MS,
     })
 
-    // A makes a change
+    // A makes a change and COMPACTS (validating epoch 1, saving watermarks)
     logA.emit([{ kind: "set", path: [], key: "fromA", value: 1 }])
+    logA.compact()
 
     // Advance time beyond retention window
     vi.setSystemTime(ONE_WEEK_MS + 1000)
@@ -64,13 +66,40 @@ describe("Retention Window", () => {
     // B makes a change
     logB.emit([{ kind: "set", path: [], key: "fromB", value: 2 }])
 
-    // B compacts - A's watermark should be pruned as it's beyond retention window
+    // B compacts - A's watermark should be pruned from the NEW checkpoint
     logB.compact()
 
-    // State should still contain both values (transactions applied before pruning)
+    // State should still contain both values (A is applied from checkpoint state, B is new)
     const state = logB.getState()
     expect(state.fromA).toBe(1)
     expect(state.fromB).toBe(2)
+
+    // Verify internally that A's watermark is gone
+    // We can check the actual checkpoint map
+    const yCheckpoint = doc.getMap<CheckpointRecord>("state-sync-log-checkpoint")
+    // Should be at least one checkpoint (latest).
+    // The key format is epoch;txCount;clientId
+    // B compacted, so B created a checkpoint for the new epoch (Epoch 2 presumably, or 1 if A made 0 to 1).
+    // Wait, A compacted Epoch 1 (0->1). logA.compact() makes Epoch 1 finalized.
+    // B starts. Active Epoch is 2. B emits. B compacts. Finalizes Epoch 2.
+    // Checkpoint for Epoch 2 should NOT have A in watermarks.
+
+    // Find checkpoint for epoch 2 (or generally, the latest)
+    // Checkpoint key with highest epoch
+    let maxEpoch = -1
+    let latestCP: CheckpointRecord | null = null
+
+    for (const [key, val] of yCheckpoint.entries()) {
+      const { epoch } = parseCheckpointKey(key)
+      if (epoch > maxEpoch) {
+        maxEpoch = epoch
+        latestCP = val
+      }
+    }
+
+    expect(latestCP).toBeDefined()
+    expect(latestCP!.watermarks.A).toBeUndefined()
+    expect(latestCP!.watermarks.B).toBeDefined()
   })
 
   it("ancient transactions from finalized epochs are not re-emitted", () => {
@@ -95,6 +124,12 @@ describe("Retention Window", () => {
 
     // State should have both (old was in checkpoint, new is fresh)
     expect(log.getState()).toStrictEqual({ old: 1, new: 2 })
+
+    // The ancient transaction should NOT be in the sorted log anymore (it was pruned)
+    // Only the 'new' transaction should remain.
+    const txs = log[getSortedTxsSymbol]()
+    expect(txs.length).toBe(1)
+    expect(txs[0].tx.ops[0]).toMatchObject({ key: "new" })
   })
 
   it("retentionWindowMs of undefined means no pruning (infinite retention)", () => {
