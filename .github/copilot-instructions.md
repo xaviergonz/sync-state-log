@@ -1,10 +1,10 @@
-# Copilot Instructions for yjs-proxy
+# Copilot Instructions for state-sync-log
 
-This repository is a pnpm workspace + Turborepo monorepo. The main deliverable is the `yjs-proxy` package under `packages/yjs-proxy`.
+This repository is a pnpm workspace + Turborepo monorepo. The main deliverable is the `state-sync-log` package under `packages/state-sync-log`.
 
 ## Overview
 
-`yjs-proxy` provides proxy-based ergonomics for Yjs (CRDT): it lets users work with `Y.Map` and `Y.Array` like plain JS objects/arrays while keeping data in Yjs structures.
+`state-sync-log` provides proxy-based ergonomics for Yjs (CRDT): it lets users work with `Y.Map` and `Y.Array` like plain JS objects/arrays while keeping data in Yjs structures.
 
 The library is careful about:
 - Converting between JS values and Yjs values.
@@ -14,9 +14,9 @@ The library is careful about:
 
 ## Repository Structure
 
-- `packages/yjs-proxy/src`: library source.
-- `packages/yjs-proxy/test`: Vitest test suite.
-- `packages/yjs-proxy/api-docs`: generated TypeDoc output.
+- `packages/state-sync-log/src`: library source.
+- `packages/state-sync-log/test`: Vitest test suite.
+- `packages/state-sync-log/api-docs`: generated TypeDoc output.
 - Root-level `README.md`, `LICENSE`, `CHANGELOG.md` are copied into the package on build.
 
 ## Tech Stack
@@ -44,7 +44,7 @@ Use `pnpm`. Prefer running commands from the repo root.
 ### Root (recommended)
 
 - `pnpm -w lint` — lint with Biome.
-- `pnpm -w lib:build` — build the `yjs-proxy` package via Turbo.
+- `pnpm -w lib:build` — build the `state-sync-log` package via Turbo.
 - `pnpm -w lib:test` — run tests via Turbo. Might add `test test/<file>.test.ts` to target specific tests.
 - `pnpm -w lib:test:ci` — run tests with coverage via Turbo.
 - `pnpm -w lib:build-docs` — generate TypeDoc output via Turbo.
@@ -54,15 +54,15 @@ Use `pnpm`. Prefer running commands from the repo root.
 - **Linting**: Biome is used for linting and formatting. Let it handle all formatting and linting concerns automatically. Always run `pnpm -w lint` before finishing a task.
 - **Minimal, surgical changes**: Avoid refactors unless required by the task.
 - **TypeScript**: keep types precise; prefer `unknown` over `any`.
-- **Public API stability**: treat exports from `packages/yjs-proxy/src/index.ts` as public surface. Avoid breaking changes unless explicitly requested.
+- **Public API stability**: treat exports from `packages/state-sync-log/src/index.ts` as public surface. Avoid breaking changes unless explicitly requested.
 - **Build artifacts**: Don’t edit generated files in `dist/`, `api-docs/`, `coverage/`. Always change source and re-generate.
 - Don’t bump package versions or publish to npm unless explicitly requested.
 - Package root files (`README.md`, `LICENSE`, `CHANGELOG.md`, `logo.png`) are copied into each package during builds; update the root copies if you need to change them.
 - Prefer making Yjs mutations inside a `doc.transact(() => { ... })` when doing multi-step updates (tests may be simpler, but library code should avoid surprising intermediate states).
 - Avoid relying on Yjs private internals (`_map`, `_start`, Item structs, etc.). Prefer public Yjs APIs and existing helpers in this repo.
 - Don’t import from `dist/` or generated type output; always work against `src/`.
-- When adding new public functionality, export it intentionally from `packages/yjs-proxy/src/index.ts` (and avoid incidental exports).
-- For bug fixes, add a regression test under `packages/yjs-proxy/test`.
+- When adding new public functionality, export it intentionally from `packages/state-sync-log/src/index.ts` (and avoid incidental exports).
+- For bug fixes, add a regression test under `packages/state-sync-log/test`.
 - Prefer small, focused tests that reproduce the behavior and assert the exact outcome.
 - If behavior differs between `Y.Map` and `Y.Array`, test both.
 - When changing proxy/unwrap semantics, add tests for:

@@ -7,13 +7,13 @@
     {
       "type": "node",
       "request": "launch",
-      "name": "yjs-proxy - Jest debug current file",
-      "program": "${workspaceFolder}/packages/yjs-proxy/node_modules/jest/bin/jest.js",
+      "name": "state-sync-log - Jest debug current file",
+      "program": "${workspaceFolder}/packages/state-sync-log/node_modules/jest/bin/jest.js",
       "args": ["--verbose", "-i", "--no-cache", "--testPathPattern", "${fileBasename}"],
       "console": "integratedTerminal",
       "internalConsoleOptions": "neverOpen",
       "skipFiles": ["**/node_modules/**", "<node_internals>/**"],
-      "cwd": "${workspaceFolder}/packages/yjs-proxy"
+      "cwd": "${workspaceFolder}/packages/state-sync-log"
     }
   ]
 }

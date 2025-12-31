@@ -33,6 +33,15 @@ importers:
 
   packages/state-sync-log:
     dependencies:
+      fast-deep-equal:
+        specifier: ^3.1.3
+        version: 3.1.3
+      immer:
+        specifier: ^11.1.3
+        version: 11.1.3
+      nanoid:
+        specifier: ^5.1.6
+        version: 5.1.6
       tslib:
         specifier: ^2.8.1
         version: 2.8.1
@@ -814,6 +823,9 @@ packages:
   html-escaper@2.0.2:
     resolution: {integrity: sha512-H2iMtd0I4Mt5eYiapRdIDjp+XzelXQ0tFE4JS7YFwFevXXMmOp9myNrUvCg0D6ws8iqkRPBfKHgbwig1SmlLfg==}
 
+  immer@11.1.3:
+    resolution: {integrity: sha512-6jQTc5z0KJFtr1UgFpIL3N9XSC3saRaI9PwWtzM2pSqkNGtiNkYY2OSwkOGDK2XcTRcLb1pi/aNkKZz0nxVH4Q==}
+
   import-lazy@4.0.0:
     resolution: {integrity: sha512-rKtvo6a868b5Hu3heneU+L4yEQ4jYKLtjpnPeUdK7h0yzXGmyBTypknlkCvHFBqfX9YlorEiMM6Dnq/5atfHkw==}
     engines: {node: '>=8'}
@@ -952,6 +964,11 @@ packages:
   nanoid@3.3.11:
     resolution: {integrity: sha512-N8SpfPUnUp1bK+PMYW8qSWdl9U+wwNWI4QKxOYDy9JAro3WMX7p2OeVRF9v+347pnakNevPmiHhNmZ2HbFA76w==}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
+    hasBin: true
+
+  nanoid@5.1.6:
+    resolution: {integrity: sha512-c7+7RQ+dMB5dPwwCp4ee1/iV/q2P6aK1mTZcfr1BTuVlyW9hJYiMPybJCcnBlQtuSmTIWNeazm/zqNoZSSElBg==}
+    engines: {node: ^18 || >=20}
     hasBin: true
 
   nice-try@1.0.5:
@@ -2017,6 +2034,8 @@ snapshots:
 
   html-escaper@2.0.2: {}
 
+  immer@11.1.3: {}
+
   import-lazy@4.0.0: {}
 
   interpret@1.4.0: {}
@@ -2152,6 +2171,8 @@ snapshots:
   muggle-string@0.4.1: {}
 
   nanoid@3.3.11: {}
+
+  nanoid@5.1.6: {}
 
   nice-try@1.0.5: {}
 
