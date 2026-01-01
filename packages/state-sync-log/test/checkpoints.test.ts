@@ -40,7 +40,7 @@ describe("Checkpoints", () => {
     expect(log.getState()).toStrictEqual({ a: 1, b: 2, c: 3 })
   })
 
-  it("preserves state after multiple compacts with no new transactions", () => {
+  it("preserves state after multiple compacts with no new txs", () => {
     const doc = new Y.Doc()
     const log = createStateSyncLog<any>({ yDoc: doc, retentionWindowMs: undefined })
 
@@ -76,7 +76,7 @@ describe("Checkpoints", () => {
     expect(log.getActiveEpoch()).toBe(0) // Still epoch 0
   })
 
-  it("transactions after compact are in new epoch", () => {
+  it("txs after compact are in new epoch", () => {
     const doc = new Y.Doc()
     const log = createStateSyncLog<any>({ yDoc: doc, retentionWindowMs: undefined })
 
@@ -97,7 +97,7 @@ describe("Checkpoints", () => {
     expect(() => parseCheckpointKey("1;2")).toThrow(/Malformed checkpoint key/)
   })
 
-  it("includes active transactions in checkpoint", () => {
+  it("includes active txs in checkpoint", () => {
     const doc = new Y.Doc()
 
     const log = createStateSyncLog<any>({
@@ -109,18 +109,18 @@ describe("Checkpoints", () => {
     // Access internal map for checkpoint verification (no public API for watermarks yet)
     const yCheckpoint = doc.getMap<CheckpointRecord>("state-sync-log-checkpoint")
 
-    // Add a transaction in epoch 1
+    // Add a tx in epoch 1
     log.emit([])
 
-    // Verify transaction exists before compact
+    // Verify tx exists before compact
     expect(log[getSortedTxsSymbol]().length).toBe(1)
 
-    // Compact (creates checkpoint for epoch 1 and prunes transactions)
+    // Compact (creates checkpoint for epoch 1 and prunes txs)
     log.compact()
 
     // Checkpoint should be created
     expect(yCheckpoint.size).toBe(1)
-    // The transaction should have been pruned
+    // The tx should have been pruned
     expect(log[getSortedTxsSymbol]().length).toBe(0)
   })
 })

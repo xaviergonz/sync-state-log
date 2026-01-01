@@ -1,14 +1,11 @@
 import * as Y from "yjs"
 import { ClientId } from "./ClientId"
 import { getFinalizedEpochAndCheckpoint } from "./checkpointUtils"
+import { ClientState, removeFromSortedCache } from "./clientState"
 import { failure } from "./error"
 import { JSONObject } from "./json"
-import { type TxRecord } from "./transactionLog"
-import {
-  parseTransactionTimestampKey,
-  type TransactionTimestamp,
-  type TransactionTimestampKey,
-} from "./transactionTimestamp"
+import { TxRecord } from "./TxRecord"
+import { TxTimestampKey } from "./txTimestamp"
 
 /**
  * Watermarking for deduplication and pruning.
@@ -53,7 +50,7 @@ export type CheckpointKeyData = {
 /**
  * Converts checkpoint key data components to a key string.
  */
-export function checkpointKeyToKey(data: CheckpointKeyData): CheckpointKey {
+function checkpointKeyDataToKey(data: CheckpointKeyData): CheckpointKey {
   return `${data.epoch};${data.txCount};${data.clientId}`
 }
 
@@ -83,43 +80,55 @@ export function parseCheckpointKey(key: CheckpointKey): CheckpointKeyData {
 export function createCheckpoint(
   yTx: Y.Map<TxRecord>,
   yCheckpoint: Y.Map<CheckpointRecord>,
+  clientState: ClientState,
   activeEpoch: number,
   currentState: JSONObject,
-  myClientId: string,
-  retentionWindowMs: number
+  myClientId: string
 ): void {
   // 1. Start with previous watermarks (from finalized epoch = activeEpoch - 1)
   const { checkpoint: prevCP } = getFinalizedEpochAndCheckpoint(yCheckpoint)
   const newWatermarks = prevCP ? { ...prevCP.watermarks } : {}
 
-  // Get active transactions using cached sorted order (filter by epoch)
+  // Get active txs using cached sorted order (filter by epoch)
   // FILTER IS REQUIRED:
   // Although we are finalizing 'activeEpoch', other peers may have already
-  // advanced to the next epoch and started syncing those transactions.
-  // We must ensure this checkpoint ONLY contains transactions from 'activeEpoch'.
-  const activeTxs: Array<{ key: TransactionTimestampKey; tx: TxRecord; ts: TransactionTimestamp }> =
-    []
-  for (const key of yTx.keys()) {
-    const ts = parseTransactionTimestampKey(key)
-    if (ts.epoch === activeEpoch) {
-      const tx = yTx.get(key)
-      if (tx) {
-        activeTxs.push({ key, tx, ts })
-      }
-    }
+  // advanced to the next epoch and started syncing those txs.
+  // We must ensure this checkpoint ONLY contains txs from 'activeEpoch'.
+  // Using clientState.sortedTxs avoids redundant key parsing (timestamps are cached).
+  //
+  // OPTIMIZATION: Since sortedTxs is sorted by epoch (primary key) and past epochs
+  // are pruned, we only need to find the right boundary. Future epochs are rare,
+  // so a simple linear search from the right is efficient (typically 0-1 iterations).
+  const sortedTxs = clientState.sortedTxs
+
+  // Find end boundary by searching from right (skip any future epoch entries)
+  let endIndex = sortedTxs.length
+  while (endIndex > 0 && sortedTxs[endIndex - 1].txTimestamp.epoch > activeEpoch) {
+    endIndex--
   }
+
+  // Slice from start to endIndex (past epochs are pruned, so these are all activeEpoch)
+  const activeTxs = sortedTxs.slice(0, endIndex)
 
   if (activeTxs.length === 0) {
-    return // Do nothing if no transactions (prevents empty epochs)
+    return // Do nothing if no txs (prevents empty epochs)
   }
 
-  // Determine Deterministic Reference Time (minWallClock)
-  // Since we have transactions, we can safely calculate min.
-  const minWallClock = Math.min(...activeTxs.map((t) => t.ts.wallClock))
-
-  // 2. Update watermarks based on OBSERVED active transactions
+  // 2. Update watermarks based on OBSERVED active txs and calculate minWallClock
+  // NOTE: We cannot use activeTxs[0].txTimestamp.wallClock for minWallClock because
+  // txs are sorted by Lamport clock (epoch → clock → clientId), not by wallClock.
+  // A client may have a high Lamport clock but early wallClock due to clock drift
+  // or receiving many messages before emitting.
+  let minWallClock = Number.POSITIVE_INFINITY
   let txCount = 0
-  for (const { ts } of activeTxs) {
+  for (const entry of activeTxs) {
+    const ts = entry.txTimestamp
+
+    // Track min wallClock for deterministic pruning reference
+    if (ts.wallClock < minWallClock) {
+      minWallClock = ts.wallClock
+    }
+
     const newWm = newWatermarks[ts.clientId]
       ? { ...newWatermarks[ts.clientId] }
       : { maxClock: -1, maxWallClock: 0 }
@@ -135,33 +144,33 @@ export function createCheckpoint(
   // 3. Prune Inactive Watermarks (Deterministic)
   // Uses minWallClock so all clients agree on exactly who to prune.
   for (const clientId in newWatermarks) {
-    if (minWallClock - newWatermarks[clientId].maxWallClock > retentionWindowMs) {
+    if (minWallClock - newWatermarks[clientId].maxWallClock > clientState.retentionWindowMs) {
       delete newWatermarks[clientId]
     }
   }
 
   // 4. Save Checkpoint
-  const cpKey = checkpointKeyToKey({
+  const cpKey = checkpointKeyDataToKey({
     epoch: activeEpoch,
     txCount,
     clientId: myClientId,
   })
   yCheckpoint.set(cpKey, {
-    state: currentState,
+    state: currentState, // Responsibility for cloning is moved to the caller if needed
     watermarks: newWatermarks,
     txCount,
     minWallClock,
   })
 
-  // 5. Early Transaction Pruning (Optimization)
-  // Delete all transactions from the now-finalized epoch
+  // 5. Early tx pruning (Optimization)
+  // Delete all txs from the now-finalized epoch
   // This reduces memory pressure instead of waiting for cleanupLog
-  for (const key of yTx.keys()) {
-    const { epoch } = parseTransactionTimestampKey(key)
-    if (epoch <= activeEpoch) {
-      yTx.delete(key)
-    }
+  const keysToDelete: TxTimestampKey[] = []
+  for (const entry of activeTxs) {
+    yTx.delete(entry.txTimestampKey)
+    keysToDelete.push(entry.txTimestampKey)
   }
+  removeFromSortedCache(clientState, keysToDelete)
 }
 
 /**

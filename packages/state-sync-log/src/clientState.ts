@@ -1,12 +1,10 @@
+import type * as Y from "yjs"
 import { CheckpointRecord } from "./checkpoints"
 import { JSONObject } from "./json"
 import { ValidateFn } from "./operations"
-import {
-  compareTransactionTimestamps,
-  parseTransactionTimestampKey,
-  type TransactionTimestamp,
-  type TransactionTimestampKey,
-} from "./transactionTimestamp"
+import { SortedTxEntry } from "./SortedTxEntry"
+import { TxRecord } from "./TxRecord"
+import { compareTxTimestamps, type TxTimestamp, type TxTimestampKey } from "./txTimestamp"
 
 /**
  * Client-side state including clocks and cache for incremental updates
@@ -23,20 +21,20 @@ export interface ClientState {
   // Cached finalized epoch (null = not yet initialized, recalculated only when checkpoint map changes)
   cachedFinalizedEpoch: number | null
 
-  // Sorted transaction cache (ALL active/future transactions, kept sorted).
-  // Contains ONLY current (>= activeEpoch) or future transactions.
+  // Sorted tx cache (ALL active/future txs, kept sorted).
+  // Contains ONLY current (>= activeEpoch) or future txs.
   // Past epochs are physically pruned during syncLog and updateState.
-  sortedTxKeys: TransactionTimestampKey[]
-  sortedTxKeysSet: Set<TransactionTimestampKey> // O(1) existence check
+  // Each entry caches its parsed timestamp and optionally the tx record.
+  sortedTxs: SortedTxEntry[]
+  sortedTxsMap: Map<TxTimestampKey, SortedTxEntry> // O(1) existence check and lookup
 
-  // Applied transactions (subset of sortedTxKeys).
-  // Tracks which physical transactions have already been integrated into the current `cachedState`.
-  // - Enables incremental updates by identifying truly new transactions (Fast Path).
-  // - Enables deduplication against logical duplicates (re-emits) from previous updates.
-  appliedTxKeys: Set<TransactionTimestampKey>
+  // Applied dedup keys - tracks which LOGICAL txs have been applied.
+  // This is the originalTxKey (or physical key if no original) for each applied tx.
+  // Used by fast path to properly deduplicate re-emits.
+  appliedTxKeys: Set<TxTimestampKey>
 
   // Track last applied timestamp for out-of-order detection
-  lastAppliedTs: TransactionTimestamp | null
+  lastAppliedTs: TxTimestamp | null
 
   // Validation function (optional, defaults to always true)
   validateFn?: ValidateFn<JSONObject>
@@ -45,6 +43,9 @@ export interface ClientState {
    * Timestamp retention window in milliseconds.
    */
   retentionWindowMs: number
+
+  // Mutable vs Immutable mode
+  immutable: boolean
 }
 
 /**
@@ -52,7 +53,8 @@ export interface ClientState {
  */
 export function createClientState(
   validateFn: ValidateFn<JSONObject> | undefined,
-  retentionWindowMs: number
+  retentionWindowMs: number,
+  immutable: boolean
 ): ClientState {
   return {
     localClock: 0,
@@ -60,47 +62,47 @@ export function createClientState(
     cachedState: null,
     currentBaseCheckpoint: null,
     cachedFinalizedEpoch: null, // Will be recalculated on first run
-    sortedTxKeys: [],
-    sortedTxKeysSet: new Set(),
+    sortedTxs: [],
+    sortedTxsMap: new Map(),
     appliedTxKeys: new Set(),
     lastAppliedTs: null,
     validateFn,
     retentionWindowMs,
+    immutable,
   }
 }
 
 /**
- * Inserts a transaction key into the sorted cache.
- * Also adds to the Set for O(1) existence checks.
- * Searches from the END since new transactions typically have higher timestamps.
+ * Inserts a tx key into the sorted cache.
+ * Also adds to the Map for O(1) existence checks.
+ * Searches from the END since new txs typically have higher timestamps.
  * Returns true if insertion caused out-of-order (key before last applied).
  */
 export function insertIntoSortedCache(
   clientState: ClientState,
-  key: TransactionTimestampKey
+  yTx: Y.Map<TxRecord>,
+  key: TxTimestampKey
 ): boolean {
-  const ts = parseTransactionTimestampKey(key)
+  const entry = new SortedTxEntry(key, yTx)
+  const ts = entry.txTimestamp
 
   // Update max seen clock from all observed traffic
   if (ts.clock > clientState.maxSeenClock) {
     clientState.maxSeenClock = ts.clock
   }
 
-  const sortedKeys = clientState.sortedTxKeys
+  const sortedTxs = clientState.sortedTxs
 
   // Search from end (most common case: new tx has highest timestamp)
-  for (let i = sortedKeys.length - 1; i >= 0; i--) {
-    const existingTs = parseTransactionTimestampKey(sortedKeys[i])
-    if (compareTransactionTimestamps(ts, existingTs) >= 0) {
+  for (let i = sortedTxs.length - 1; i >= 0; i--) {
+    const existingTs = sortedTxs[i].txTimestamp
+    if (compareTxTimestamps(ts, existingTs) >= 0) {
       // Insert after this position
-      sortedKeys.splice(i + 1, 0, key)
-      clientState.sortedTxKeysSet.add(key)
+      sortedTxs.splice(i + 1, 0, entry)
+      clientState.sortedTxsMap.set(key, entry)
 
       // Check if this is out-of-order relative to last applied
-      if (
-        clientState.lastAppliedTs &&
-        compareTransactionTimestamps(ts, clientState.lastAppliedTs) < 0
-      ) {
+      if (clientState.lastAppliedTs && compareTxTimestamps(ts, clientState.lastAppliedTs) < 0) {
         return true // Out of order!
       }
       return false
@@ -108,35 +110,48 @@ export function insertIntoSortedCache(
   }
 
   // Lowest timestamp - insert at beginning
-  sortedKeys.unshift(key)
-  clientState.sortedTxKeysSet.add(key)
+  sortedTxs.unshift(entry)
+  clientState.sortedTxsMap.set(key, entry)
 
   // Check if this is out-of-order relative to last applied
-  if (
-    clientState.lastAppliedTs &&
-    compareTransactionTimestamps(ts, clientState.lastAppliedTs) < 0
-  ) {
+  if (clientState.lastAppliedTs && compareTxTimestamps(ts, clientState.lastAppliedTs) < 0) {
     return true // Out of order!
   }
   return false
 }
 
 /**
- * Removes a transaction key from the sorted cache.
- * Searches from the START since old transactions are removed first.
+ * Removes multiple tx keys from the sorted cache in a single pass.
+ * Iterates from the start since old txs are typically deleted first.
  */
 export function removeFromSortedCache(
   clientState: ClientState,
-  key: TransactionTimestampKey
+  keys: readonly TxTimestampKey[]
 ): void {
-  clientState.sortedTxKeysSet.delete(key)
-  // DO NOT remove from applied here. Managed by updateState.
+  if (keys.length === 0) return
 
-  // Search from start (most common case: oldest tx being removed)
-  for (let i = 0; i < clientState.sortedTxKeys.length; i++) {
-    if (clientState.sortedTxKeys[i] === key) {
-      clientState.sortedTxKeys.splice(i, 1)
-      return
+  // Build set of keys to delete (only those that exist in the map)
+  const toDelete = new Set<TxTimestampKey>()
+  for (const key of keys) {
+    if (clientState.sortedTxsMap.has(key)) {
+      clientState.sortedTxsMap.delete(key)
+      toDelete.add(key)
+    }
+  }
+
+  if (toDelete.size === 0) return
+
+  // Single forward pass through sortedTxs, removing matching entries
+  // Iterate from start since old txs (at beginning) are typically deleted first
+  const sortedTxs = clientState.sortedTxs
+  let i = 0
+  while (i < sortedTxs.length && toDelete.size > 0) {
+    if (toDelete.has(sortedTxs[i].txTimestampKey)) {
+      toDelete.delete(sortedTxs[i].txTimestampKey)
+      sortedTxs.splice(i, 1)
+      // Don't increment i - next element shifted into current position
+    } else {
+      i++
     }
   }
 }

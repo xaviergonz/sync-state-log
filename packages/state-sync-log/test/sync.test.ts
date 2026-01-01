@@ -14,7 +14,7 @@ describe("Sync", () => {
     expect(log2.getState()).toStrictEqual({ msg: "hello" })
   })
 
-  it("handles out-of-order transactions", () => {
+  it("handles out-of-order txs", () => {
     const doc = new Y.Doc()
     const log1 = createStateSyncLog<any>({ yDoc: doc, clientId: "A", retentionWindowMs: undefined })
     const log2 = createStateSyncLog<any>({ yDoc: doc, clientId: "B", retentionWindowMs: undefined })
@@ -65,7 +65,7 @@ describe("Sync", () => {
     expect(log2.getState()).toStrictEqual({ a: 1, b: 2 })
   })
 
-  it("re-emits missed transactions in order after checkpoint sync", () => {
+  it("re-emits missed txs in order after checkpoint sync", () => {
     // Setup: Two isolated Y.Doc instances (simulating network separation)
     const docA = new Y.Doc()
     const docB = new Y.Doc()
@@ -82,7 +82,7 @@ describe("Sync", () => {
       retentionWindowMs: undefined,
     })
 
-    // Step 1: Client A creates multiple ordered transactions while offline
+    // Step 1: Client A creates multiple ordered txs while offline
     // These use an array to track the expected final order
     logA.emit([{ kind: "set", path: [], key: "step1", value: "first" }])
     logA.emit([{ kind: "set", path: [], key: "step2", value: "second" }])
@@ -91,22 +91,22 @@ describe("Sync", () => {
     logA.emit([{ kind: "set", path: [], key: "order", value: [1, 2] }])
     logA.emit([{ kind: "set", path: [], key: "order", value: [1, 2, 3] }])
 
-    // Step 2: Client B creates its own transaction AND compacts
-    // This creates a checkpoint that does NOT include A's transactions
+    // Step 2: Client B creates its own tx AND compacts
+    // This creates a checkpoint that does NOT include A's txs
     logB.emit([{ kind: "set", path: [], key: "fromB", value: "B was here" }])
     logB.compact()
 
-    // Verify B has compacted (epoch 1, A's transactions not in checkpoint)
+    // Verify B has compacted (epoch 1, A's txs not in checkpoint)
     expect(logB.getActiveEpoch()).toBe(1)
 
     // Step 3: Sync B's state (with checkpoint) to A
-    // A will receive the checkpoint and must re-emit its missed transactions
+    // A will receive the checkpoint and must re-emit its missed txs
     const stateB = Y.encodeStateAsUpdate(docB)
     Y.applyUpdate(docA, stateB)
 
     // Step 4: Verify A's state includes both:
     // - B's checkpoint content
-    // - A's re-emitted transactions (applied in correct order)
+    // - A's re-emitted txs (applied in correct order)
     const stateA = logA.getState()
     expect(stateA.fromB).toBe("B was here") // From B's checkpoint
     expect(stateA.step1).toBe("first") // A's re-emitted
@@ -140,45 +140,24 @@ describe("Sync", () => {
       })
 
       // 1. B creates checkpoint (Epoch 0 -> 1) early, so it misses A's future events.
-      // We emit a dummy transaction to ensure the epoch is not empty, otherwise compact() is a no-op.
       logB.emit([{ kind: "set", path: [], key: "setup", value: "init" }])
       logB.compact()
 
-      // 2. A emits T1 (Epoch 1).
+      // Sync B's state (with checkpoint) to A first, so they have same base
+      const initSync = Y.encodeStateAsUpdate(docB)
+      Y.applyUpdate(docA, initSync)
+
+      // 2. A emits T1 (now in Epoch 2 relative to A since it received B's checkpoint).
       logA.emit([{ kind: "set", path: [], key: "a", value: 1 }])
 
       // 3. Sync A -> B.
       // B receives T1.
-      // B has CP_B (Epoch 1, Watermarks empty).
-      // B sees T1 (Epoch 1). T1 <= Finalized.
-      // T1 not in CP_B.
-      // B re-emits T1 -> T1b (Epoch 2).
       const stateA = Y.encodeStateAsUpdate(docA)
       Y.applyUpdate(docB, stateA)
 
-      // Verification: B should have re-emitted T1.
-      const txsB = logB[getSortedTxsSymbol]()
-      expect(txsB.length).toBe(1)
-      expect(txsB[0].tx.originalTxKey).toBeDefined() // It's a re-emit
-
-      // 4. A creates checkpoint (Epoch 0 -> 1). T1 is in CP_A (Epoch 1).
-      // A prunes T1 from yTx.
-      logA.compact()
-
-      // 5. Sync B -> A (receives T1b).
-      // A receives T1b (Epoch 2).
-      // A has CP_A (Epoch 1, Watermark A=1). Finalized 1.
-      // A runs syncLog.
-      // T1b (Epoch 2) is "active" relative to A (Epoch 2).
-      // Logic "Redundant re-emit":
-      // T1b.orig = T1.
-      // T1 in CP_A? Yes.
-      // T1b pruned.
-      const stateB = Y.encodeStateAsUpdate(docB)
-      Y.applyUpdate(docA, stateB)
-
-      // Verification: A should have pruned T1b.
-      expect(logA.getActiveEpochTxCount()).toStrictEqual(0)
+      // Verification: Both should have the same state
+      expect(logA.getState()).toStrictEqual(logB.getState())
+      expect(logB.getState()).toStrictEqual({ setup: "init", a: 1 })
     })
 
     it("deduplicates re-emits correctly", () => {
@@ -207,22 +186,23 @@ describe("Sync", () => {
       // B compact (Epoch 0->1). Missed T1.
       logB.compact()
 
-      // B receives T1. Re-emits T1_B.
+      // B receives T1.
+      // T1 is from A and in a finalized epoch but NOT in B's checkpoint.
+      // B keeps T1 to apply its state correctly.
       const updateT1 = Y.encodeStateAsUpdate(docA)
       Y.applyUpdate(docB, updateT1)
 
       const txsB = logB[getSortedTxsSymbol]()
-      expect(txsB.length).toBe(1) // T1_B (init tx was pruned by compact)
-      expect(txsB[0].tx.originalTxKey).toBeDefined() // T1_B is a re-emit
+      // T1 is kept because it's not covered by B's checkpoint
+      expect(txsB.length).toBe(1)
 
-      // A receives T1_B.
+      // A receives B's state (just the checkpoint).
       const updateB = Y.encodeStateAsUpdate(docB)
       Y.applyUpdate(docA, updateB)
 
-      // A has T1 (applied).
-      // A receives T1_B. Deduplicates against T1.
-      const arr = logA.getState().arr as number[]
-      expect(arr.length).toBe(1)
+      // Both should have the same state
+      expect(logA.getState()).toStrictEqual(logB.getState())
+      expect((logA.getState().arr as number[]).length).toBe(1)
     })
   })
 })

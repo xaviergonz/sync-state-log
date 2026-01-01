@@ -1,6 +1,5 @@
 import * as Y from "yjs"
-import { type CheckpointRecord, type ClientWatermarks, parseCheckpointKey } from "./checkpoints"
-import { parseTransactionTimestampKey, type TransactionTimestampKey } from "./transactionTimestamp"
+import { type CheckpointRecord, parseCheckpointKey } from "./checkpoints"
 
 /**
  * Determines the finalized epoch and its canonical checkpoint in a single pass.
@@ -42,17 +41,4 @@ export function getFinalizedEpochAndCheckpoint(yCheckpoint: Y.Map<CheckpointReco
   }
 
   return { finalizedEpoch: maxEpoch, checkpoint: best }
-}
-
-/**
- * Checks if a transaction is covered by the checkpoint watermarks.
- */
-export function isTransactionInCheckpoint(
-  key: TransactionTimestampKey,
-  watermarks: ClientWatermarks
-): boolean {
-  const ts = parseTransactionTimestampKey(key)
-  const wm = watermarks[ts.clientId]
-  if (!wm) return false
-  return ts.clock <= wm.maxClock
 }

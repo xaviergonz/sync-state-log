@@ -1,6 +1,9 @@
 import equal from "fast-deep-equal"
 import { nanoid } from "nanoid"
+import rfdc from "rfdc"
 import type { JSONValue } from "./json"
+
+const clone = rfdc({ proto: true })
 
 /**
  * Deep equality check for JSONValues.
@@ -22,4 +25,11 @@ export function generateID(): string {
  */
 export function isObject(value: unknown): value is object {
   return value !== null && typeof value === "object"
+}
+
+/**
+ * Deep clones a JSON-serializable value.
+ */
+export function deepClone<T>(value: T): T {
+  return clone(value)
 }

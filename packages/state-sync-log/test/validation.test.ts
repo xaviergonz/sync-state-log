@@ -77,7 +77,7 @@ describe("Validation", () => {
     expect(log.getState().obj).toStrictEqual({ a: 1 })
   })
 
-  it("partial transaction failure rejects entire transaction", () => {
+  it("partial tx failure rejects entire tx", () => {
     const doc = new Y.Doc()
     const log = createStateSyncLog<any>({ yDoc: doc, retentionWindowMs: undefined })
 
@@ -114,7 +114,7 @@ describe("Validation", () => {
     log.emit([{ kind: "set", path: [], key: "safe", value: 1 }])
     expect(log.getState()).toStrictEqual({ safe: 1 })
 
-    // This should not throw but reject the transaction
+    // This should not throw but reject the tx
     log.emit([{ kind: "set", path: [], key: "trigger", value: "error" }])
     expect(log.getState()).toStrictEqual({ safe: 1 }) // State unchanged
   })

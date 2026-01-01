@@ -98,7 +98,7 @@ describe("Controller API", () => {
     const doc = new Y.Doc()
     const log = createStateSyncLog<any>({ yDoc: doc, retentionWindowMs: undefined })
 
-    // Before any transactions
+    // Before any txs
     expect(log.getActiveEpochStartTime()).toBeUndefined()
 
     log.emit([{ kind: "set", path: [], key: "a", value: 1 }])
@@ -109,7 +109,7 @@ describe("Controller API", () => {
 
     log.compact()
 
-    // After compact - new epoch has no transactions
+    // After compact - new epoch has no txs
     expect(log.getActiveEpochStartTime()).toBeUndefined()
   })
 

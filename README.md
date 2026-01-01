@@ -99,7 +99,6 @@ log.emit([
 ## Contents
 
 - [Installation](#installation)
-- [Quickstart](#quickstart)
 - [API Reference](#api-reference)
 - [Operations](#operations)
 - [Gotchas & Limitations](#gotchas--limitations)
@@ -114,6 +113,22 @@ npm install state-sync-log
 pnpm add state-sync-log
 # or
 yarn add state-sync-log
+```
+
+## Performance & Immutability
+
+`state-sync-log` can operate in two modes:
+
+1. **Mutable (Default):** Updates state in-place. This is significantly faster for high-frequency updates (e.g., drag-and-drop, real-time chaos). In case of a conflict/rollback, we use an undo stack to revert changes instantly.
+2. **Immutable:** Uses structural sharing (via Proxies) to produce a new immutable state reference for every change. This is slower but useful if your UI framework relies on reference equality (e.g., `React.memo`, strict Redux reducers).
+
+You can configure this in `createStateSyncLog`:
+
+```ts
+const log = createStateSyncLog({
+  yDoc,
+  immutable: false // default
+})
 ```
 
 ## Storage Efficiency
@@ -171,6 +186,7 @@ const log = createStateSyncLog<State>({
 | `validate` | `(state: State) => boolean` | **Required.** The gatekeeper function. If it returns `false`, the transaction is dropped. |
 | `clientId` | `string` | Optional unique ID. Auto-generated if omitted. |
 | `retentionWindowMs` | `number` | Time to keep transaction history before pruning (recommended: 2 weeks). Helps keep storage small. |
+| `immutable` | `boolean` | If `true`, state is immutable (slower writes). If `false` (default), state is mutable (faster writes). |
 
 ### `StateSyncLogController`
 

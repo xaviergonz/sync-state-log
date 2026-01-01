@@ -7,16 +7,13 @@ import { JSONObject } from "./json"
 import { Op, ValidateFn } from "./operations"
 
 import { computeReconcileOps } from "./reconcile"
-import { appendTransaction, TxKeyChanges, TxRecord, updateState } from "./transactionLog"
-import { parseTransactionTimestampKey, TransactionTimestampKey } from "./transactionTimestamp"
-import { generateID } from "./utils"
+import { SortedTxEntry } from "./SortedTxEntry"
+import { TxRecord } from "./TxRecord"
+import { appendTx, TxKeyChanges, updateState } from "./txLog"
+import { TxTimestampKey } from "./txTimestamp"
+import { deepClone, generateID } from "./utils"
 
 export const getSortedTxsSymbol = Symbol("getSortedTxs")
-
-export type SortedTxInfo = {
-  key: TransactionTimestampKey
-  tx: TxRecord
-}
 
 export interface StateSyncLogOptions<State extends JSONObject> {
   /**
@@ -25,7 +22,7 @@ export interface StateSyncLogOptions<State extends JSONObject> {
   yDoc: Y.Doc
 
   /**
-   * Name for the transactions Y.Map.
+   * Name for the txs Y.Map.
    * Default: "state-sync-log-tx"
    */
   yTxMapName?: string
@@ -45,26 +42,35 @@ export interface StateSyncLogOptions<State extends JSONObject> {
   clientId?: string
 
   /**
-   * Origin tag for Y.js transactions created by this library.
+   * Origin tag for Y.js txs created by this library.
    */
   yjsOrigin?: unknown
 
   /**
    * Optional validation function.
-   * Runs after each transaction's operations are applied.
-   * If it returns false, the transaction is rejected (state reverts).
+   * Runs after each tx's ops are applied.
+   * If it returns false, the tx is rejected (state reverts).
    * MUST be deterministic and consistent across all clients.
    */
   validate?: (state: State) => boolean
 
   /**
    * Timestamp retention window in milliseconds.
-   * Transactions older than this window are considered "Ancient" and pruned.
+   * Txs older than this window are considered "Ancient" and pruned.
    *
    * Default: Infinity (No pruning).
    * Recommended: 14 days (1209600000 ms).
    */
   retentionWindowMs: number | undefined
+
+  /**
+   * If true, keeps state immutable (using Mutative/Proxies).
+   * If false (default), uses mutable state with rollback for higher performance.
+   *
+   * - Use `true` if you rely on reference equality (e.g. React.memo, Redux).
+   * - Use `false` if you want maximum write throughput.
+   */
+  immutable?: boolean
 }
 
 export interface StateSyncLogController<State extends JSONObject> {
@@ -79,7 +85,7 @@ export interface StateSyncLogController<State extends JSONObject> {
   subscribe(callback: (newState: State, appliedOps: readonly Op[]) => void): () => void
 
   /**
-   * Emits a new transaction (list of operations) to the log.
+   * Emits a new tx (list of operations) to the log.
    */
   emit(ops: Op[]): void
 
@@ -106,12 +112,12 @@ export interface StateSyncLogController<State extends JSONObject> {
   getActiveEpoch(): number
 
   /**
-   * Returns the number of transactions currently in the active epoch.
+   * Returns the number of txs currently in the active epoch.
    */
   getActiveEpochTxCount(): number
 
   /**
-   * Returns the wallClock timestamp of the first transaction in the active epoch.
+   * Returns the wallClock timestamp of the first tx in the active epoch.
    */
   getActiveEpochStartTime(): number | undefined
 
@@ -121,9 +127,9 @@ export interface StateSyncLogController<State extends JSONObject> {
   isLogEmpty(): boolean
 
   /**
-   * Internal/Testing: Returns all transactions currently in the log, sorted.
+   * Internal/Testing: Returns all txs currently in the log, sorted.
    */
-  [getSortedTxsSymbol](): SortedTxInfo[]
+  [getSortedTxsSymbol](): SortedTxEntry[]
 }
 
 /**
@@ -140,6 +146,7 @@ export function createStateSyncLog<State extends JSONObject>(
     yjsOrigin,
     validate,
     retentionWindowMs,
+    immutable = false,
   } = options
 
   if (clientId.includes(";")) {
@@ -152,7 +159,8 @@ export function createStateSyncLog<State extends JSONObject>(
   // Cast validate to basic type to match internal ClientState
   const clientState = createClientState(
     validate as unknown as ValidateFn<JSONObject>,
-    retentionWindowMs ?? Number.POSITIVE_INFINITY
+    retentionWindowMs ?? Number.POSITIVE_INFINITY,
+    immutable
   )
 
   // Listeners
@@ -166,8 +174,8 @@ export function createStateSyncLog<State extends JSONObject>(
 
   // Helper to extract key changes from YMapEvent
   const extractTxChanges = (event: Y.YMapEvent<TxRecord>): TxKeyChanges => {
-    const added: TransactionTimestampKey[] = []
-    const deleted: TransactionTimestampKey[] = []
+    const added: TxTimestampKey[] = []
+    const deleted: TxTimestampKey[] = []
 
     for (const [key, change] of event.changes.keys) {
       if (change.action === "add") {
@@ -188,13 +196,21 @@ export function createStateSyncLog<State extends JSONObject>(
 
   // Update Logic with incremental changes
   const runUpdate = (txChanges: TxKeyChanges | undefined) => {
-    const { state, ops } = updateState(yDoc, yTx, yCheckpoint, clientId, clientState, txChanges)
+    const { state, ops } = updateState(
+      yDoc,
+      yTx,
+      yCheckpoint,
+      clientId,
+      clientState,
+      txChanges,
+      immutable
+    )
     if (ops.length > 0) {
       notifySubscribers(state as State, ops)
     }
   }
 
-  // Transaction observer
+  // Tx observer
   const txObserver = (event: Y.YMapEvent<TxRecord>, _transaction: Y.Transaction) => {
     const txChanges = extractTxChanges(event)
     runUpdate(txChanges)
@@ -248,7 +264,7 @@ export function createStateSyncLog<State extends JSONObject>(
       assertNotDisposed()
       yDoc.transact(() => {
         const activeEpoch = getActiveEpochInternal()
-        appendTransaction(ops, yTx, activeEpoch, clientId, clientState)
+        appendTx(ops, yTx, activeEpoch, clientId, clientState)
       }, yjsOrigin)
     },
 
@@ -269,10 +285,10 @@ export function createStateSyncLog<State extends JSONObject>(
         createCheckpoint(
           yTx,
           yCheckpoint,
+          clientState,
           activeEpoch,
-          currentState,
-          clientId,
-          clientState.retentionWindowMs
+          immutable ? currentState : deepClone(currentState),
+          clientId
         )
       }, yjsOrigin)
     },
@@ -294,10 +310,10 @@ export function createStateSyncLog<State extends JSONObject>(
       assertNotDisposed()
       const activeEpoch = getActiveEpochInternal()
       let count = 0
-      // Only current or future epochs exist in sortedTxKeys (past epochs are pruned during updateState).
-      // Future epochs appear if we receive transactions before the corresponding checkpoint.
-      for (const key of clientState.sortedTxKeys) {
-        const ts = parseTransactionTimestampKey(key)
+      // Only current or future epochs exist in sortedTxs (past epochs are pruned during updateState).
+      // Future epochs appear if we receive txs before the corresponding checkpoint.
+      for (const entry of clientState.sortedTxs) {
+        const ts = entry.txTimestamp
         if (ts.epoch === activeEpoch) {
           count++
         } else if (ts.epoch > activeEpoch) {
@@ -310,9 +326,9 @@ export function createStateSyncLog<State extends JSONObject>(
     getActiveEpochStartTime(): number | undefined {
       assertNotDisposed()
       const activeEpoch = getActiveEpochInternal()
-      // Only current or future epochs exist in sortedTxKeys (past epochs are pruned during updateState).
-      for (const key of clientState.sortedTxKeys) {
-        const ts = parseTransactionTimestampKey(key)
+      // Only current or future epochs exist in sortedTxs (past epochs are pruned during updateState).
+      for (const entry of clientState.sortedTxs) {
+        const ts = entry.txTimestamp
         if (ts.epoch === activeEpoch) {
           return ts.wallClock
         } else if (ts.epoch > activeEpoch) {
@@ -327,12 +343,9 @@ export function createStateSyncLog<State extends JSONObject>(
       return yTx.size === 0 && yCheckpoint.size === 0
     },
 
-    [getSortedTxsSymbol](): SortedTxInfo[] {
+    [getSortedTxsSymbol](): SortedTxEntry[] {
       assertNotDisposed()
-      return clientState.sortedTxKeys.map((key) => ({
-        key,
-        tx: yTx.get(key)!,
-      }))
+      return clientState.sortedTxs
     },
   }
 }

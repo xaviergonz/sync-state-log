@@ -364,7 +364,7 @@ describe("Two Client Sync", () => {
     // A still has valid value
     expect(logA.getState().count).toBe(10)
 
-    // After sync, B's invalid transaction is also rejected on A
+    // After sync, B's invalid tx is also rejected on A
     syncDocs(docA, docB)
 
     expectConvergence(logA, logB)

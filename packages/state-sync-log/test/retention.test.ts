@@ -15,14 +15,14 @@ describe("Retention Window", () => {
     vi.useRealTimers()
   })
 
-  it("transactions within retention window are preserved", () => {
+  it("txs within retention window are preserved", () => {
     const doc = new Y.Doc()
     const log = createStateSyncLog<any>({
       yDoc: doc,
       retentionWindowMs: TWO_WEEKS_MS,
     })
 
-    // Create transaction at time 0
+    // Create tx at time 0
     vi.setSystemTime(0)
     log.emit([{ kind: "set", path: [], key: "early", value: 1 }])
 
@@ -33,7 +33,7 @@ describe("Retention Window", () => {
     // Compact
     log.compact()
 
-    // Both transactions should be in the state (within retention)
+    // Both txs should be in the state (within retention)
     expect(log.getState()).toStrictEqual({ early: 1, later: 2 })
   })
 
@@ -102,7 +102,7 @@ describe("Retention Window", () => {
     expect(latestCP!.watermarks.B).toBeDefined()
   })
 
-  it("ancient transactions from finalized epochs are not re-emitted", () => {
+  it("ancient txs from finalized epochs are not re-emitted", () => {
     const doc = new Y.Doc()
 
     vi.setSystemTime(0)
@@ -112,24 +112,24 @@ describe("Retention Window", () => {
       retentionWindowMs: ONE_WEEK_MS,
     })
 
-    // Create transaction and compact
+    // Create tx and compact
     log.emit([{ kind: "set", path: [], key: "old", value: 1 }])
     log.compact()
 
     // Advance time way beyond retention
     vi.setSystemTime(TWO_WEEKS_MS)
 
-    // Add new transaction in new epoch
+    // Add new tx in new epoch
     log.emit([{ kind: "set", path: [], key: "new", value: 2 }])
 
     // State should have both (old was in checkpoint, new is fresh)
     expect(log.getState()).toStrictEqual({ old: 1, new: 2 })
 
-    // The ancient transaction should NOT be in the sorted log anymore (it was pruned)
-    // Only the 'new' transaction should remain.
+    // The ancient tx should NOT be in the sorted log anymore (it was pruned)
+    // Only the 'new' tx should remain.
     const txs = log[getSortedTxsSymbol]()
     expect(txs.length).toBe(1)
-    expect(txs[0].tx.ops[0]).toMatchObject({ key: "new" })
+    expect(txs[0].txRecord!.ops[0]).toMatchObject({ key: "new" })
   })
 
   it("retentionWindowMs of undefined means no pruning (infinite retention)", () => {
@@ -188,7 +188,7 @@ describe("Retention Window", () => {
     logA.emit([{ kind: "set", path: [], key: "a2", value: 2 }])
     logA.compact()
 
-    // B comes back online with a very old transaction
+    // B comes back online with a very old tx
     logB.emit([{ kind: "set", path: [], key: "bOld", value: "old" }])
 
     // Sync both ways
@@ -198,7 +198,7 @@ describe("Retention Window", () => {
     Y.applyUpdate(docA, stateB)
 
     // Both should eventually converge
-    // B's old transaction may or may not be included depending on when it was created
+    // B's old tx may or may not be included depending on when it was created
     // relative to the checkpoint's minWallClock
     const finalStateA = logA.getState()
     const finalStateB = logB.getState()
