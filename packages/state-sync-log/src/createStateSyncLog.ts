@@ -73,7 +73,7 @@ export interface StateSyncLogController<State extends JSONObject> {
   /**
    * Subscribes to state changes.
    */
-  subscribe(callback: (newState: State, appliedOps: readonly Op[]) => void): () => void
+  subscribe(callback: (newState: State, getAppliedOps: () => readonly Op[]) => void): () => void
 
   /**
    * Emits a new tx (list of operations) to the log.
@@ -120,7 +120,7 @@ export interface StateSyncLogController<State extends JSONObject> {
   /**
    * Internal/Testing: Returns all txs currently in the log, sorted.
    */
-  [getSortedTxsSymbol](): SortedTxEntry[]
+  [getSortedTxsSymbol](): readonly SortedTxEntry[]
 }
 
 /**
@@ -153,11 +153,11 @@ export function createStateSyncLog<State extends JSONObject>(
   )
 
   // Listeners
-  const subscribers = new Set<(state: State, ops: readonly Op[]) => void>()
+  const subscribers = new Set<(state: State, getAppliedOps: () => readonly Op[]) => void>()
 
-  const notifySubscribers = (state: State, ops: readonly Op[]) => {
+  const notifySubscribers = (state: State, getAppliedOps: () => readonly Op[]) => {
     for (const sub of subscribers) {
-      sub(state, ops)
+      sub(state, getAppliedOps)
     }
   }
 
@@ -185,10 +185,15 @@ export function createStateSyncLog<State extends JSONObject>(
 
   // Update Logic with incremental changes
   const runUpdate = (txChanges: TxKeyChanges | undefined) => {
-    const { state, ops } = updateState(yDoc, yTx, yCheckpoint, clientId, clientState, txChanges)
-    if (ops.length > 0) {
-      notifySubscribers(state as State, ops)
-    }
+    const { state, getAppliedOps } = updateState(
+      yDoc,
+      yTx,
+      yCheckpoint,
+      clientId,
+      clientState,
+      txChanges
+    )
+    notifySubscribers(state as State, getAppliedOps)
   }
 
   // Tx observer
@@ -230,10 +235,10 @@ export function createStateSyncLog<State extends JSONObject>(
   return {
     getState(): State {
       assertNotDisposed()
-      return (clientState.cachedState ?? {}) as State
+      return (clientState.stateCalculator.getCachedState() ?? {}) as State
     },
 
-    subscribe(callback: (newState: State, appliedOps: readonly Op[]) => void): () => void {
+    subscribe(callback: (newState: State, getAppliedOps: () => readonly Op[]) => void): () => void {
       assertNotDisposed()
       subscribers.add(callback)
       return () => {
@@ -251,7 +256,7 @@ export function createStateSyncLog<State extends JSONObject>(
 
     reconcileState(targetState: State): void {
       assertNotDisposed()
-      const currentState = (clientState.cachedState ?? {}) as State
+      const currentState = (clientState.stateCalculator.getCachedState() ?? {}) as State
       const ops = computeReconcileOps(currentState, targetState)
       if (ops.length > 0) {
         this.emit(ops)
@@ -262,7 +267,7 @@ export function createStateSyncLog<State extends JSONObject>(
       assertNotDisposed()
       yDoc.transact(() => {
         const activeEpoch = getActiveEpochInternal()
-        const currentState = clientState.cachedState ?? {}
+        const currentState = clientState.stateCalculator.getCachedState() ?? {}
         createCheckpoint(yTx, yCheckpoint, clientState, activeEpoch, currentState, clientId)
       }, yjsOrigin)
     },
@@ -286,7 +291,7 @@ export function createStateSyncLog<State extends JSONObject>(
       let count = 0
       // Only current or future epochs exist in sortedTxs (past epochs are pruned during updateState).
       // Future epochs appear if we receive txs before the corresponding checkpoint.
-      for (const entry of clientState.sortedTxs) {
+      for (const entry of clientState.stateCalculator.getSortedTxs()) {
         const ts = entry.txTimestamp
         if (ts.epoch === activeEpoch) {
           count++
@@ -301,7 +306,7 @@ export function createStateSyncLog<State extends JSONObject>(
       assertNotDisposed()
       const activeEpoch = getActiveEpochInternal()
       // Only current or future epochs exist in sortedTxs (past epochs are pruned during updateState).
-      for (const entry of clientState.sortedTxs) {
+      for (const entry of clientState.stateCalculator.getSortedTxs()) {
         const ts = entry.txTimestamp
         if (ts.epoch === activeEpoch) {
           return ts.wallClock
@@ -317,9 +322,9 @@ export function createStateSyncLog<State extends JSONObject>(
       return yTx.size === 0 && yCheckpoint.size === 0
     },
 
-    [getSortedTxsSymbol](): SortedTxEntry[] {
+    [getSortedTxsSymbol](): readonly SortedTxEntry[] {
       assertNotDisposed()
-      return clientState.sortedTxs
+      return clientState.stateCalculator.getSortedTxs()
     },
   }
 }

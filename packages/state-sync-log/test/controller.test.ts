@@ -19,7 +19,9 @@ describe("Controller API", () => {
     log.emit([{ kind: "set", path: [], key: "a", value: 1 }])
 
     expect(spy).toHaveBeenCalledTimes(1)
-    expect(spy).toHaveBeenCalledWith({ a: 1 }, [{ kind: "set", path: [], key: "a", value: 1 }])
+    const [state, getAppliedOps] = spy.mock.lastCall!
+    expect(state).toStrictEqual({ a: 1 })
+    expect(getAppliedOps()).toStrictEqual([{ kind: "set", path: [], key: "a", value: 1 }])
   })
 
   it("unsubscribe stops callback from firing", () => {
@@ -121,8 +123,10 @@ describe("Controller API", () => {
     log.subscribe(spy)
     log.emit([])
 
-    // Empty emit should not trigger subscriber
-    expect(spy).not.toHaveBeenCalled()
+    // Empty emit SHOULD trigger subscriber now (with lazy ops)
+    expect(spy).toHaveBeenCalled()
+    const [_state, getAppliedOps] = spy.mock.lastCall!
+    expect(getAppliedOps()).toStrictEqual([])
     expect(log.getState()).toStrictEqual({})
   })
 

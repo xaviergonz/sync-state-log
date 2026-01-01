@@ -1,7 +1,7 @@
 import * as Y from "yjs"
 import { ClientId } from "./ClientId"
 import { getFinalizedEpochAndCheckpoint } from "./checkpointUtils"
-import { ClientState, removeFromSortedCache } from "./clientState"
+import { ClientState } from "./clientState"
 import { failure } from "./error"
 import { JSONObject } from "./json"
 import { TxRecord } from "./TxRecord"
@@ -94,12 +94,12 @@ export function createCheckpoint(
   // Although we are finalizing 'activeEpoch', other peers may have already
   // advanced to the next epoch and started syncing those txs.
   // We must ensure this checkpoint ONLY contains txs from 'activeEpoch'.
-  // Using clientState.sortedTxs avoids redundant key parsing (timestamps are cached).
+  // Using stateCalculator.getSortedTxs avoids redundant key parsing (timestamps are cached).
   //
   // OPTIMIZATION: Since sortedTxs is sorted by epoch (primary key) and past epochs
   // are pruned, we only need to find the right boundary. Future epochs are rare,
   // so a simple linear search from the right is efficient (typically 0-1 iterations).
-  const sortedTxs = clientState.sortedTxs
+  const sortedTxs = clientState.stateCalculator.getSortedTxs()
 
   // Find end boundary by searching from right (skip any future epoch entries)
   let endIndex = sortedTxs.length
@@ -170,7 +170,7 @@ export function createCheckpoint(
     yTx.delete(entry.txTimestampKey)
     keysToDelete.push(entry.txTimestampKey)
   }
-  removeFromSortedCache(clientState, keysToDelete)
+  clientState.stateCalculator.removeTxs(keysToDelete)
 }
 
 /**

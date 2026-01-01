@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import * as Y from "yjs"
 import { CheckpointRecord, parseCheckpointKey } from "../src/checkpoints"
 import { createStateSyncLog, getSortedTxsSymbol } from "../src/createStateSyncLog"
+import { applyOps } from "../src/operations"
 
 describe("Checkpoints", () => {
   it("compacts epoch and maintains state", () => {
@@ -129,7 +130,6 @@ describe("Checkpoints", () => {
     const log = createStateSyncLog<any>({
       yDoc: doc,
       retentionWindowMs: undefined,
-      
     })
 
     // Create nested state
@@ -178,19 +178,16 @@ describe("Checkpoints", () => {
     const log1 = createStateSyncLog<any>({
       yDoc: doc1,
       retentionWindowMs: undefined,
-      
     })
 
     const log2 = createStateSyncLog<any>({
       yDoc: doc2,
       retentionWindowMs: undefined,
-      
     })
 
     const log3 = createStateSyncLog<any>({
       yDoc: doc3,
       retentionWindowMs: undefined,
-      
     })
 
     // Client 1 creates initial state with nested structures
@@ -234,7 +231,7 @@ describe("Checkpoints", () => {
     const log = createStateSyncLog<any>({
       yDoc: doc,
       retentionWindowMs: undefined,
-      
+
       validate,
     })
 
@@ -279,14 +276,14 @@ describe("Checkpoints", () => {
     const log1 = createStateSyncLog<any>({
       yDoc: doc1,
       retentionWindowMs: undefined,
-      
+
       validate,
     })
 
     const log2 = createStateSyncLog<any>({
       yDoc: doc2,
       retentionWindowMs: undefined,
-      
+
       validate,
     })
 
@@ -339,14 +336,14 @@ describe("Checkpoints", () => {
     const log1 = createStateSyncLog<any>({
       yDoc: doc1,
       retentionWindowMs: undefined,
-      
+
       validate,
     })
 
     const log2 = createStateSyncLog<any>({
       yDoc: doc2,
       retentionWindowMs: undefined,
-      
+
       validate,
     })
 
@@ -370,5 +367,128 @@ describe("Checkpoints", () => {
 
     // Reference should be stable since no valid changes were applied
     expect(stateAfterFailedSync).toBe(stateBeforeFailedSync)
+  })
+
+  describe("Subscribe Ops Reconciliation", () => {
+    it("emits correct minimal ops to reconcile mutable state when syncing a checkpoint", () => {
+      const docA = new Y.Doc()
+      const logA = createStateSyncLog<any>({
+        yDoc: docA,
+        clientId: "A",
+        retentionWindowMs: undefined,
+      })
+
+      // 1. Client A creates state and checkpoints it
+      logA.emit([
+        { kind: "set", path: [], key: "x", value: 1 },
+        { kind: "set", path: [], key: "y", value: 2 },
+      ])
+      logA.compact() // Creates checkpoint, active epoch becomes 1
+
+      expect(logA.getState()).toStrictEqual({ x: 1, y: 2 })
+
+      // 2. Client B starts empty
+      const docB = new Y.Doc()
+      const logB = createStateSyncLog<any>({
+        yDoc: docB,
+        clientId: "B",
+        retentionWindowMs: undefined,
+      })
+
+      // Client B maintains a mutable state
+      const mutableState: any = {}
+      const subscriber = vi.fn((_state, getAppliedOps) => {
+        applyOps(getAppliedOps(), mutableState)
+      })
+
+      logB.subscribe(subscriber)
+
+      // Initial state check
+      expect(mutableState).toStrictEqual({})
+
+      // 3. Sync A -> B (B receives the checkpoint)
+      Y.applyUpdate(docB, Y.encodeStateAsUpdate(docA))
+
+      // 4. Verify subscriber fired and ops correctly updated the mutable state
+      expect(subscriber).toHaveBeenCalled()
+      expect(mutableState).toStrictEqual({ x: 1, y: 2 })
+      expect(logB.getState()).toStrictEqual({ x: 1, y: 2 })
+
+      // Verify minimal ops: should be just set x=1, set y=2
+      // Note: sync might trigger multiple updates (e.g. checkpoint + txs), filter for the one with ops
+      const ops =
+        subscriber.mock.calls.map((args: any) => args[1]()).find((o: any) => o.length > 0) || []
+      expect(ops.length).toBe(2)
+      expect(ops).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: "set", key: "x", value: 1 }),
+          expect.objectContaining({ kind: "set", key: "y", value: 2 }),
+        ])
+      )
+    })
+
+    it("emits correct minimal ops when checkpoint replaces existing state (conflict/reorg)", () => {
+      const docA = new Y.Doc()
+      const logA = createStateSyncLog<any>({
+        yDoc: docA,
+        clientId: "A",
+        retentionWindowMs: undefined,
+      })
+
+      const docB = new Y.Doc()
+      const logB = createStateSyncLog<any>({
+        yDoc: docB,
+        clientId: "B",
+        retentionWindowMs: undefined,
+      })
+
+      // 1. Client B has some initial state (epoch 0)
+      logB.emit([{ kind: "set", path: [], key: "existing", value: "start" }])
+
+      // Client B maintains mutable state
+      const mutableState: any = { existing: "start" }
+      const subscriber = vi.fn((_state, getAppliedOps) => {
+        applyOps(getAppliedOps(), mutableState)
+      })
+      logB.subscribe(subscriber)
+
+      // 2. Sync B -> A so A knows about B's state (and will watermark it)
+      Y.applyUpdate(docA, Y.encodeStateAsUpdate(docB))
+
+      // 3. Client A overwrites the state and checkpoints it
+      logA.emit([
+        { kind: "set", path: [], key: "x", value: 100 },
+        { kind: "set", path: [], key: "existing", value: "overwritten" },
+      ])
+      logA.compact()
+
+      // 4. Sync A -> B (B accepts checkpoint)
+      Y.applyUpdate(docB, Y.encodeStateAsUpdate(docA))
+
+      // 5. Verify mutable state matches new reality
+      expect(mutableState).toStrictEqual({
+        existing: "overwritten",
+        x: 100,
+      })
+      expect(logB.getState()).toStrictEqual({
+        existing: "overwritten",
+        x: 100,
+      })
+
+      // Verify minimal ops
+      // Current: { existing: "start" }
+      // Target: { existing: "overwritten", x: 100 }
+      // Expected diff: set existing="overwritten", set x=100
+      // Find the call with ops
+      const ops =
+        subscriber.mock.calls.map((args: any) => args[1]()).find((o: any) => o.length > 0) || []
+      expect(ops.length).toBe(2)
+      expect(ops).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: "set", key: "existing", value: "overwritten" }),
+          expect.objectContaining({ kind: "set", key: "x", value: 100 }),
+        ])
+      )
+    })
   })
 })

@@ -576,7 +576,7 @@ describe("Fuzzy Sync", () => {
 
       // If we reach here, the test passed. Cleanup the failure log if it exists.
       if (fs.existsSync(logPath)) {
-        // fs.unlinkSync(logPath)
+        fs.unlinkSync(logPath)
         console.log(`Fuzzy test passed. Deleted ${logPath}.`)
       }
     } catch (e) {

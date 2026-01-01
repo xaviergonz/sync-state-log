@@ -141,7 +141,11 @@ import { observable } from "mobx"
 const store = observable(log.getState())
 
 // 2. Sync it!
-log.subscribe((newState, appliedOps) => {
+// 2. Sync it!
+log.subscribe((newState, getAppliedOps) => {
+  // getAppliedOps is a lazy getter (computing reconciliation diffs only when requested)
+  const appliedOps = getAppliedOps()
+
   // Apply ONLY the changes (efficient!)
   applyOps(appliedOps, store)
 })
@@ -150,6 +154,8 @@ log.subscribe((newState, appliedOps) => {
 By default, `applyOps` deep clones values before inserting them to prevent aliasing. For better performance, you can disable cloning if you guarantee op values won't be mutated:
 
 ```ts
+// Calculate ops first
+const appliedOps = getAppliedOps()
 applyOps(appliedOps, store, { cloneValues: false })
 ```
 
@@ -191,10 +197,11 @@ Propose a change. The change applies optimistically but may be reverted if it co
 
 #### `subscribe(callback): UnsubscribeFn`
 
-Listen for state changes.
+Listen for state changes. The callback receives the new state and a lazy getter function for the operations applied.
 
 ```ts
-log.subscribe((newState, appliedOps) => {
+log.subscribe((newState, getAppliedOps) => {
+  const appliedOps = getAppliedOps()
   render(newState)
 })
 ```

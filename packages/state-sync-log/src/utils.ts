@@ -38,3 +38,18 @@ export function deepClone<T>(value: T): T {
   }
   return clone(value)
 }
+
+/**
+ * Creates a lazy memoized getter.
+ */
+export function lazy<T>(fn: () => T): () => T {
+  let computed = false
+  let value: T
+  return () => {
+    if (!computed) {
+      value = fn()
+      computed = true
+    }
+    return value
+  }
+}
