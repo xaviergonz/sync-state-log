@@ -163,11 +163,7 @@ function applyAllTransactions(clientState: ClientState, baseState: JSONObject): 
 
   // Check if transaction was already applied in the base checkpoint
   const watermarks = baseCP?.watermarks ?? {}
-  let hasWatermarks = false
-  for (const _ in watermarks) {
-    hasWatermarks = true
-    break
-  }
+  const hasWatermarks = Object.keys(watermarks).length > 0
 
   const sortedTxs = clientState.sortedTxs
   const appliedTxKeys = clientState.appliedTxKeys
@@ -293,33 +289,28 @@ export function updateState(
     pruneCheckpoints(yCheckpoint, finalizedEpoch)
   })
 
-  // Update sorted cache with new/deleted keys from txChanges
-  // This must happen after syncLog which may have deleted some of these keys
-  // Track out-of-order insertions for fast path
-  let earlyOutOfOrder = false
-  if (txChanges) {
-    // Process deleted keys (syncLog may have deleted more than txChanges.deleted)
-    // The Map was already updated by removeFromSortedCache in syncLog
-
-    // Process added keys
-    for (const key of txChanges.added) {
-      // CRITICAL: Check yTx.has(key)! syncLog might have just pruned it.
-      if (yTx.has(key) && !clientState.sortedTxsMap.has(key)) {
-        if (insertIntoSortedCache(clientState, yTx, key)) {
-          earlyOutOfOrder = true
-        }
-      }
-    }
-  }
-
   if (needsRebuildSortedCache) {
     // SLOW PATH: Full recompute
     return recomputeState(clientState)
   }
 
   // SEMI FAST PATH: Incremental update using only changed keys
+  // txChanges is guaranteed to exist here since !txChanges implies needsRebuildSortedCache
 
-  // Process deleted keys first
+  // Update sorted cache with new keys from txChanges
+  // This must happen after syncLog which may have deleted some of these keys
+  // Track out-of-order insertions for fast path
+  let insertedTxOutOfOrder = false
+  for (const key of txChanges.added) {
+    // CRITICAL: Check yTx.has(key)! syncLog might have just pruned it.
+    if (yTx.has(key) && !clientState.sortedTxsMap.has(key)) {
+      if (insertIntoSortedCache(clientState, yTx, key)) {
+        insertedTxOutOfOrder = true
+      }
+    }
+  }
+
+  // Process deleted keys
   const deletedCount = removeFromSortedCache(clientState, txChanges.deleted)
 
   // If any keys were deleted from yTx, we need to recompute state.
@@ -330,10 +321,7 @@ export function updateState(
   // syncLog may have deleted/re-emitted transactions, invalidating lastAppliedIndex
   // Also check for out-of-order insertions from early insert loop
   // Also trigger recompute if transactions were deleted from yTx
-  const outOfOrder = earlyOutOfOrder || syncLogModifiedCache || hasDeletedTx
-
-  // NOTE: Added keys are already in cache from early insert above
-  // The early insert loop handles all txChanges.added keys before we reach this point
+  const outOfOrder = insertedTxOutOfOrder || syncLogModifiedCache || hasDeletedTx
 
   // Out-of-order arrival detected - use optimized replay (reuses sorted cache)
   if (outOfOrder) {
