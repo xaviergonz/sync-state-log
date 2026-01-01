@@ -36,6 +36,10 @@ export interface ClientState {
   // Track last applied timestamp for out-of-order detection
   lastAppliedTs: TxTimestamp | null
 
+  // Track the index of the last applied transaction in sortedTxs (optimization)
+  // -1 means nothing applied yet, reset on full recompute
+  lastAppliedIndex: number
+
   // Validation function (optional, defaults to always true)
   validateFn?: ValidateFn<JSONObject>
 
@@ -66,6 +70,7 @@ export function createClientState(
     sortedTxsMap: new Map(),
     appliedTxKeys: new Set(),
     lastAppliedTs: null,
+    lastAppliedIndex: -1,
     validateFn,
     retentionWindowMs,
     immutable,

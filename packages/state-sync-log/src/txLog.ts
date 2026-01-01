@@ -9,12 +9,7 @@ import { applyTx, Op } from "./operations"
 import { computeReconcileOps } from "./reconcile"
 import { SortedTxEntry } from "./SortedTxEntry"
 import { TxRecord } from "./TxRecord"
-import {
-  parseTxTimestampKey,
-  type TxTimestamp,
-  type TxTimestampKey,
-  txTimestampToKey,
-} from "./txTimestamp"
+import { type TxTimestamp, type TxTimestampKey, txTimestampToKey } from "./txTimestamp"
 
 /**
  * Checks if a transaction is covered by the checkpoint watermarks.
@@ -100,24 +95,16 @@ function syncLog(
   const toReEmit: Array<{ originalKey: TxTimestampKey; tx: TxRecord }> = []
 
   // 1. Helper to decide what to do with each transaction
-  const processKey = (
-    txTimestampKey: TxTimestampKey,
-    txTimestamp: TxTimestamp,
-    txOriginalTimestampKey: TxTimestampKey | undefined | null,
-    txOriginalTimestamp: TxTimestamp | undefined | null,
-    txRecord: TxRecord
-  ): boolean => {
-    const dedupTs = txOriginalTimestamp ?? txTimestamp
-
-    if (shouldPrune(txTimestamp, dedupTs)) {
-      toDelete.push(txTimestampKey)
+  const processEntry = (entry: SortedTxEntry): boolean => {
+    if (shouldPrune(entry.txTimestamp, entry.dedupTxTimestamp)) {
+      toDelete.push(entry.txTimestampKey)
       return false // deleted
     }
 
-    if (txTimestamp.epoch <= finalizedEpoch) {
+    if (entry.txTimestamp.epoch <= finalizedEpoch) {
       // Not in checkpoint and still fresh - re-emit it to the active epoch
-      toReEmit.push({ originalKey: txOriginalTimestampKey ?? txTimestampKey, tx: txRecord })
-      toDelete.push(txTimestampKey)
+      toReEmit.push({ originalKey: entry.dedupTxTimestampKey, tx: entry.txRecord })
+      toDelete.push(entry.txTimestampKey)
       return false // re-emitted
     }
 
@@ -126,31 +113,17 @@ function syncLog(
 
   // 2. Scan local cache (sortedTxs) to identify missing/ancient transactions
   for (const entry of clientState.sortedTxs) {
-    if (
-      processKey(
-        entry.txTimestampKey,
-        entry.txTimestamp,
-        entry.originalTxTimestampKey,
-        entry.originalTxTimestamp,
-        entry.txRecord
-      )
-    ) {
+    if (processEntry(entry)) {
       // Optimization: Physical keys are sorted. If we hit the active/fresh territory, we can stop.
       break
     }
   }
 
   const processKeyByTimestampKey = (txTimestampKey: TxTimestampKey): void => {
-    const txRecord = yTx.get(txTimestampKey)
-    if (!txRecord) return
-
-    processKey(
-      txTimestampKey,
-      parseTxTimestampKey(txTimestampKey),
-      txRecord.originalTxKey,
-      txRecord.originalTxKey ? parseTxTimestampKey(txRecord.originalTxKey) : undefined,
-      txRecord
-    )
+    // Only process if it actually exists in Yjs Map
+    if (yTx.has(txTimestampKey)) {
+      processEntry(new SortedTxEntry(txTimestampKey, yTx))
+    }
   }
 
   // 3. Scan NEW keys from Yjs to handle incoming transactions (sync)
@@ -161,13 +134,13 @@ function syncLog(
     }
   }
 
-  // 3. Re-emit missed transactions BEFORE pruning
+  // 4. Re-emit missed transactions BEFORE pruning
   for (const { originalKey, tx } of toReEmit) {
     const newKey = appendTx(tx.ops, yTx, activeEpoch, myClientId, clientState, originalKey)
     insertIntoSortedCache(clientState, yTx, newKey)
   }
 
-  // 4. Prune old/finalized/redundant transactions from Yjs Map
+  // 5. Prune old/finalized/redundant transactions from Yjs Map
   for (const key of toDelete) {
     yTx.delete(key)
   }
@@ -201,7 +174,7 @@ function computeState(yTx: Y.Map<TxRecord>, clientState: ClientState): JSONObjec
   }
 
   for (const entry of clientState.sortedTxs) {
-    const dedupKey = entry.originalTxTimestampKey ?? entry.txTimestampKey
+    const dedupKey = entry.dedupTxTimestampKey
 
     // Skip if already processed (handles duplicates within this loop)
     if (clientState.appliedTxKeys.has(dedupKey)) {
@@ -214,7 +187,7 @@ function computeState(yTx: Y.Map<TxRecord>, clientState: ClientState): JSONObjec
     // Skip if this dedupKey was already applied in the checkpoint
     // Only parse timestamp if we have watermarks to check against
     if (hasWatermarks) {
-      const dedupTs = entry.originalTxTimestamp ?? entry.txTimestamp
+      const dedupTs = entry.dedupTxTimestamp
       if (isTransactionInCheckpoint(dedupTs, watermarks)) {
         continue
       }
@@ -231,9 +204,12 @@ function computeState(yTx: Y.Map<TxRecord>, clientState: ClientState): JSONObjec
     }
   }
 
-  // Set lastAppliedTs to the last entry if we have any
+  // Set lastAppliedTs and lastAppliedIndex to the last entry if we have any
   if (clientState.sortedTxs.length > 0) {
     clientState.lastAppliedTs = clientState.sortedTxs[clientState.sortedTxs.length - 1].txTimestamp
+    clientState.lastAppliedIndex = clientState.sortedTxs.length - 1
+  } else {
+    clientState.lastAppliedIndex = -1
   }
 
   return state
@@ -259,8 +235,11 @@ function handleFullRecompute(
   clientState.sortedTxs = []
   clientState.sortedTxsMap.clear()
   clientState.lastAppliedTs = null
+  clientState.lastAppliedIndex = -1
+
   const newState = computeFullState(yTx, clientState)
   const ops = computeReconcileOps(oldState, newState)
+
   return { state: newState, ops }
 }
 
@@ -344,26 +323,24 @@ export function updateState(
     return handleFullRecompute(yTx, clientState)
   }
 
-  // Apply pending transactions
+  // Apply pending transactions - O(1) optimization: start from lastAppliedIndex + 1
   let state = clientState.cachedState as JSONObject
   const appliedOps: Op[] = []
   let lastAppliedEntry: SortedTxEntry | null = null
+  const sortedTxs = clientState.sortedTxs
+  const startIndex = clientState.lastAppliedIndex + 1
 
-  for (const entry of clientState.sortedTxs) {
-    // Fast path: for transactions without originalTxKey, key === dedupKey
-    // So this check catches most already-applied transactions
-    if (clientState.appliedTxKeys.has(entry.txTimestampKey)) continue
+  for (let i = startIndex; i < sortedTxs.length; i++) {
+    const entry = sortedTxs[i]
 
-    const tx = entry.txRecord
-    if (!tx) continue
+    const dedupKey = entry.dedupTxTimestampKey
 
-    const dedupKey = tx.originalTxKey ?? entry.txTimestampKey
-
-    // Skip if already applied (deduplication) - handles re-emits
+    // Skip if already applied (deduplication) - handles re-emits with same originalTxKey
     if (clientState.appliedTxKeys.has(dedupKey)) {
       continue
     }
 
+    const tx = entry.txRecord
     const newState = applyTx(state, tx.ops, clientState.validateFn, immutable)
     if (newState) {
       state = newState
@@ -372,6 +349,7 @@ export function updateState(
 
     clientState.appliedTxKeys.add(dedupKey)
     lastAppliedEntry = entry
+    clientState.lastAppliedIndex = i
   }
 
   // Use cached timestamp from the last applied entry
@@ -380,5 +358,6 @@ export function updateState(
   }
 
   clientState.cachedState = state
+
   return { state, ops: appliedOps }
 }

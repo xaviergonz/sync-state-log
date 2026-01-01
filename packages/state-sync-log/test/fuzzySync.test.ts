@@ -319,12 +319,12 @@ function syncConnectedClients(docs: Y.Doc[], connected: boolean[]): void {
   let changed = true
   while (changed) {
     changed = false
-  const updates = connectedDocs.map((doc) => Y.encodeStateAsUpdate(doc))
-  for (let i = 0; i < connectedDocs.length; i++) {
-    for (let j = 0; j < updates.length; j++) {
-      if (i !== j) {
+    const updates = connectedDocs.map((doc) => Y.encodeStateAsUpdate(doc))
+    for (let i = 0; i < connectedDocs.length; i++) {
+      for (let j = 0; j < updates.length; j++) {
+        if (i !== j) {
           const stateBefore = Y.encodeStateVector(connectedDocs[i])
-        Y.applyUpdate(connectedDocs[i], updates[j])
+          Y.applyUpdate(connectedDocs[i], updates[j])
           const stateAfter = Y.encodeStateVector(connectedDocs[i])
           // Check if state vector changed
           if (!arraysEqual(stateBefore, stateAfter)) {
@@ -442,7 +442,7 @@ describe("Fuzzy Sync", () => {
                   firstTx: sortedTxs[0]?.txTimestampKey,
                   lastTx: sortedTxs.slice(-1)[0]?.txTimestampKey,
                   // Show the full set of canonical keys applied to see which ones are missing/extra
-                  canonicalKeys: sortedTxs.map((t) => t.txRecord!.originalTxKey ?? t.txTimestampKey),
+                  canonicalKeys: sortedTxs.map((t) => t.dedupTxTimestampKey),
                 }
               }
               const infoA = getInfo(0)
@@ -583,8 +583,8 @@ describe("Fuzzy Sync", () => {
     } catch (e) {
       // Only write failure log if one doesn't already exist (preserve original failure)
       if (!fs.existsSync(logPath)) {
-      console.error(`Fuzzy test failed! Writing actions log to ${logPath}`)
-      fs.writeFileSync(logPath, JSON.stringify(currentRunActions, null, 2))
+        console.error(`Fuzzy test failed! Writing actions log to ${logPath}`)
+        fs.writeFileSync(logPath, JSON.stringify(currentRunActions, null, 2))
       } else {
         console.error(`Fuzzy test failed! Preserving existing failure log at ${logPath}`)
       }

@@ -52,6 +52,22 @@ export class SortedTxEntry {
   }
 
   /**
+   * Gets the logical (deduplicated) tx timestamp key.
+   * This is the original tx key if it exists, otherwise the physical key.
+   */
+  get dedupTxTimestampKey(): TxTimestampKey {
+    return this.originalTxTimestampKey ?? this.txTimestampKey
+  }
+
+  /**
+   * Gets the logical (deduplicated) parsed tx timestamp.
+   * This is the original tx timestamp if it exists, otherwise the physical timestamp.
+   */
+  get dedupTxTimestamp(): TxTimestamp {
+    return this.originalTxTimestamp ?? this.txTimestamp
+  }
+
+  /**
    * Gets the tx record, lazily fetching and caching on first access.
    * Returns undefined if the tx doesn't exist.
    */

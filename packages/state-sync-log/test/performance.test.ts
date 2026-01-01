@@ -6,44 +6,50 @@ describe("Performance", () => {
   // Use 1000 for fast CI. Increase to 10000+ for stress testing.
   const iterations = 10000
 
-  it(`measures performance of ${iterations} array pushes`, () => {
-    const doc = new Y.Doc()
-    const log = createStateSyncLog<any>({ yDoc: doc, retentionWindowMs: undefined })
+  for (const immutable of [false, true]) {
+    const mode = immutable ? "immutable" : "mutable"
 
-    // Initialize array
-    log.emit([{ kind: "set", path: [], key: "list", value: [] }])
+    describe(mode, () => {
+      it(`measures performance of ${iterations} array pushes`, () => {
+        const doc = new Y.Doc()
+        const log = createStateSyncLog<any>({ yDoc: doc, retentionWindowMs: undefined, immutable })
 
-    const start = performance.now()
-    for (let i = 0; i < iterations; i++) {
-      log.emit([{ kind: "splice", path: ["list"], index: i, deleteCount: 0, inserts: [i] }])
-    }
-    const end = performance.now()
+        // Initialize array
+        log.emit([{ kind: "set", path: [], key: "list", value: [] }])
 
-    console.log(`${iterations} Array Pushes: ${(end - start).toFixed(2)}ms`)
-    console.log(`Average per push: ${((end - start) / iterations).toFixed(3)}ms`)
+        const start = performance.now()
+        for (let i = 0; i < iterations; i++) {
+          log.emit([{ kind: "splice", path: ["list"], index: i, deleteCount: 0, inserts: [i] }])
+        }
+        const end = performance.now()
 
-    expect(log.getState().list.length).toBe(iterations)
-  }, 30000) // 30s timeout
+        console.log(`${iterations} Array Pushes (${mode}): ${(end - start).toFixed(2)}ms`)
+        console.log(`Average per push: ${((end - start) / iterations).toFixed(3)}ms`)
 
-  it(`measures performance of ${iterations} random updates on an object with 1000 keys`, () => {
-    const doc = new Y.Doc()
-    const log = createStateSyncLog<any>({ yDoc: doc, retentionWindowMs: undefined })
+        expect(log.getState().list.length).toBe(iterations)
+      }, 60000) // 60s timeout
 
-    // Initialize with 1000 keys
-    for (let i = 0; i < 1000; i++) {
-      log.emit([{ kind: "set", path: [], key: `key_${i}`, value: i }])
-    }
+      it(`measures performance of ${iterations} random updates on an object with 1000 keys`, () => {
+        const doc = new Y.Doc()
+        const log = createStateSyncLog<any>({ yDoc: doc, retentionWindowMs: undefined, immutable })
 
-    const start = performance.now()
-    for (let i = 0; i < iterations; i++) {
-      const keyIndex = Math.floor(Math.random() * 1000)
-      log.emit([{ kind: "set", path: [], key: `key_${keyIndex}`, value: i }])
-    }
-    const end = performance.now()
+        // Initialize with 1000 keys
+        for (let i = 0; i < 1000; i++) {
+          log.emit([{ kind: "set", path: [], key: `key_${i}`, value: i }])
+        }
 
-    console.log(`${iterations} Random Updates: ${(end - start).toFixed(2)}ms`)
-    console.log(`Average per update: ${((end - start) / iterations).toFixed(3)}ms`)
+        const start = performance.now()
+        for (let i = 0; i < iterations; i++) {
+          const keyIndex = Math.floor(Math.random() * 1000)
+          log.emit([{ kind: "set", path: [], key: `key_${keyIndex}`, value: i }])
+        }
+        const end = performance.now()
 
-    expect(Object.keys(log.getState()).length).toBe(1000)
-  }, 30000)
+        console.log(`${iterations} Random Updates (${mode}): ${(end - start).toFixed(2)}ms`)
+        console.log(`Average per update: ${((end - start) / iterations).toFixed(3)}ms`)
+
+        expect(Object.keys(log.getState()).length).toBe(1000)
+      }, 60000)
+    })
+  }
 })
