@@ -7,6 +7,13 @@ import { TxRecord } from "./TxRecord"
 import { compareTxTimestamps, type TxTimestamp, type TxTimestampKey } from "./txTimestamp"
 
 /**
+ * Comparator for SortedTxEntry using cached timestamps.
+ */
+function compareSortedTxEntries(a: SortedTxEntry, b: SortedTxEntry): number {
+  return compareTxTimestamps(a.txTimestamp, b.txTimestamp)
+}
+
+/**
  * Client-side state including clocks and cache for incremental updates
  */
 export interface ClientState {
@@ -47,9 +54,6 @@ export interface ClientState {
    * Timestamp retention window in milliseconds.
    */
   retentionWindowMs: number
-
-  // Mutable vs Immutable mode
-  immutable: boolean
 }
 
 /**
@@ -57,8 +61,7 @@ export interface ClientState {
  */
 export function createClientState(
   validateFn: ValidateFn<JSONObject> | undefined,
-  retentionWindowMs: number,
-  immutable: boolean
+  retentionWindowMs: number
 ): ClientState {
   return {
     localClock: 0,
@@ -73,7 +76,6 @@ export function createClientState(
     lastAppliedIndex: -1,
     validateFn,
     retentionWindowMs,
-    immutable,
   }
 }
 
@@ -128,12 +130,16 @@ export function insertIntoSortedCache(
 /**
  * Removes multiple tx keys from the sorted cache in a single pass.
  * Iterates from the start since old txs are typically deleted first.
+ *
+ * @returns The number of keys deleted.
  */
 export function removeFromSortedCache(
   clientState: ClientState,
   keys: readonly TxTimestampKey[]
-): void {
-  if (keys.length === 0) return
+): number {
+  if (keys.length === 0) return 0
+
+  let deletedCount = 0
 
   // Build set of keys to delete (only those that exist in the map)
   const toDelete = new Set<TxTimestampKey>()
@@ -144,7 +150,7 @@ export function removeFromSortedCache(
     }
   }
 
-  if (toDelete.size === 0) return
+  if (toDelete.size === 0) return 0
 
   // Single forward pass through sortedTxs, removing matching entries
   // Iterate from start since old txs (at beginning) are typically deleted first
@@ -154,9 +160,47 @@ export function removeFromSortedCache(
     if (toDelete.has(sortedTxs[i].txTimestampKey)) {
       toDelete.delete(sortedTxs[i].txTimestampKey)
       sortedTxs.splice(i, 1)
+      deletedCount++
       // Don't increment i - next element shifted into current position
     } else {
       i++
     }
+  }
+
+  return deletedCount
+}
+
+/**
+ * Rebuilds the sorted tx cache from all keys in yTx in O(n log n) time.
+ * More efficient than calling insertIntoSortedCache n times (which is O(n²)).
+ * Used during full recompute.
+ */
+export function rebuildSortedCache(clientState: ClientState, yTx: Y.Map<TxRecord>): void {
+  // Clear existing cache
+  clientState.sortedTxs = []
+  clientState.sortedTxsMap.clear()
+
+  // Collect all entries and pre-parse timestamps (O(n) parsing)
+  const entries: SortedTxEntry[] = []
+  let maxClock = clientState.maxSeenClock
+
+  for (const key of yTx.keys()) {
+    const entry = new SortedTxEntry(key, yTx)
+    // Pre-parse and cache timestamp - avoids repeated parsing during sort
+    const clock = entry.txTimestamp.clock
+    if (clock > maxClock) {
+      maxClock = clock
+    }
+    entries.push(entry)
+  }
+  clientState.maxSeenClock = maxClock
+
+  // Sort once - O(n log n) comparisons, but timestamps already cached
+  entries.sort(compareSortedTxEntries)
+
+  // Build the map
+  clientState.sortedTxs = entries
+  for (const entry of entries) {
+    clientState.sortedTxsMap.set(entry.txTimestampKey, entry)
   }
 }

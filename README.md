@@ -115,22 +115,6 @@ pnpm add state-sync-log
 yarn add state-sync-log
 ```
 
-## Performance & Immutability
-
-`state-sync-log` can operate in two modes:
-
-1. **Mutable (Default):** Updates state in-place. This is significantly faster for high-frequency updates (e.g., drag-and-drop, real-time chaos). In case of a conflict/rollback, we use an undo stack to revert changes instantly.
-2. **Immutable:** Uses structural sharing (via Proxies) to produce a new immutable state reference for every change. This is slower but useful if your UI framework relies on reference equality (e.g., `React.memo`, strict Redux reducers).
-
-You can configure this in `createStateSyncLog`:
-
-```ts
-const log = createStateSyncLog({
-  yDoc,
-  immutable: false // default
-})
-```
-
 ## Storage Efficiency
 
 Since this is an append-only log, you might worry about it growing forever. We solved that.
@@ -163,6 +147,12 @@ log.subscribe((newState, appliedOps) => {
 })
 ```
 
+By default, `applyOps` deep clones values before inserting them to prevent aliasing. For better performance, you can disable cloning if you guarantee op values won't be mutated:
+
+```ts
+applyOps(appliedOps, store, { cloneValues: false })
+```
+
 ## API Reference
 
 ### `createStateSyncLog(options)`
@@ -186,7 +176,6 @@ const log = createStateSyncLog<State>({
 | `validate` | `(state: State) => boolean` | **Required.** The gatekeeper function. If it returns `false`, the transaction is dropped. |
 | `clientId` | `string` | Optional unique ID. Auto-generated if omitted. |
 | `retentionWindowMs` | `number` | Time to keep transaction history before pruning (recommended: 2 weeks). Helps keep storage small. |
-| `immutable` | `boolean` | If `true`, state is immutable (slower writes). If `false` (default), state is mutable (faster writes). |
 
 ### `StateSyncLogController`
 
@@ -194,7 +183,7 @@ The object returned by `createStateSyncLog`.
 
 #### `getState(): State`
 
-Returns the current, validated state. This is an immutable snapshot.
+Returns the current, validated state. Uses structural sharing for efficient immutable updates.
 
 #### `emit(ops: Op[]): void`
 

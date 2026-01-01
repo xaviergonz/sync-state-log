@@ -5,4 +5,4 @@ export {
   type StateSyncLogOptions,
 } from "./createStateSyncLog"
 export type { JSONObject, JSONValue, Path } from "./json"
-export { applyOps, type Op, type ValidateFn } from "./operations"
+export { type ApplyOpsOptions, applyOps, type Op, type ValidateFn } from "./operations"

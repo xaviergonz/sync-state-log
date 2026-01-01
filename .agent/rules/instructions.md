@@ -77,3 +77,4 @@ Use `pnpm`. Prefer running commands from the repo root.
 - If the change affects user-facing behavior, update `README.md` and/or `CHANGELOG.md` at the repo root (the build copies them into the package).
 - Prefer workspace commands (`pnpm ...` from root) over running package scripts directly, unless debugging a single package.
 - Don’t add new dependencies unless necessary; prefer existing utilities already used in the repo.
+- Never ever do git commits, change of branch or mess up with the stashed changes.

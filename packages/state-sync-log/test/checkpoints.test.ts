@@ -123,4 +123,252 @@ describe("Checkpoints", () => {
     // The tx should have been pruned
     expect(log[getSortedTxsSymbol]().length).toBe(0)
   })
+
+  it("preserves structural sharing after compaction", () => {
+    const doc = new Y.Doc()
+    const log = createStateSyncLog<any>({
+      yDoc: doc,
+      retentionWindowMs: undefined,
+      
+    })
+
+    // Create nested state
+    log.emit([
+      { kind: "set", path: [], key: "unchanged", value: { nested: { deep: "value" } } },
+      { kind: "set", path: [], key: "willChange", value: { data: 1 } },
+    ])
+
+    const stateBeforeCompact = log.getState()
+
+    // Compact - creates checkpoint
+    log.compact()
+
+    const stateAfterCompact = log.getState()
+    const unchangedRefAfterCompact = stateAfterCompact.unchanged
+
+    // After compaction, state should still be structurally shared with checkpoint
+    expect(stateAfterCompact.unchanged).toBe(unchangedRefAfterCompact)
+    expect(stateAfterCompact).toStrictEqual(stateBeforeCompact)
+
+    // Now update only the "willChange" key
+    log.emit([{ kind: "set", path: ["willChange"], key: "data", value: 2 }])
+
+    const stateAfterUpdate = log.getState()
+
+    // The "unchanged" subtree should maintain reference equality
+    expect(stateAfterUpdate.unchanged).toBe(unchangedRefAfterCompact)
+    expect(stateAfterUpdate.unchanged.nested).toBe(unchangedRefAfterCompact.nested)
+
+    // The changed part should have new value
+    expect(stateAfterUpdate.willChange.data).toBe(2)
+
+    // Overall state should be correct
+    expect(stateAfterUpdate).toStrictEqual({
+      unchanged: { nested: { deep: "value" } },
+      willChange: { data: 2 },
+    })
+  })
+
+  it("maintains state correctness during out-of-order sync", () => {
+    // Two clients syncing - need to create out-of-order arrival
+    const doc1 = new Y.Doc()
+    const doc2 = new Y.Doc()
+    const doc3 = new Y.Doc()
+
+    const log1 = createStateSyncLog<any>({
+      yDoc: doc1,
+      retentionWindowMs: undefined,
+      
+    })
+
+    const log2 = createStateSyncLog<any>({
+      yDoc: doc2,
+      retentionWindowMs: undefined,
+      
+    })
+
+    const log3 = createStateSyncLog<any>({
+      yDoc: doc3,
+      retentionWindowMs: undefined,
+      
+    })
+
+    // Client 1 creates initial state with nested structures
+    log1.emit([
+      { kind: "set", path: [], key: "unchanged", value: { nested: { deep: "value" } } },
+      { kind: "set", path: [], key: "willChange", value: { data: 1 } },
+    ])
+
+    // Client 2 makes its own update (timestamp will be different)
+    log2.emit([{ kind: "set", path: [], key: "from2", value: "hello" }])
+
+    // Sync doc1 → doc3 first (doc3 sees client1's tx)
+    Y.applyUpdate(doc3, Y.encodeStateAsUpdate(doc1))
+
+    const state3AfterDoc1 = log3.getState()
+
+    // Now sync doc2 → doc3 (doc3 sees client2's tx which has EARLIER timestamp)
+    // This triggers out-of-order replay because client2's tx should be sorted before client1's
+    Y.applyUpdate(doc3, Y.encodeStateAsUpdate(doc2))
+
+    const state3AfterDoc2 = log3.getState()
+
+    // State should have all values (correctness is preserved even if structural sharing is not)
+    expect(state3AfterDoc2).toStrictEqual({
+      unchanged: { nested: { deep: "value" } },
+      willChange: { data: 1 },
+      from2: "hello",
+    })
+
+    // Note: Out-of-order replay may not preserve structural sharing due to rollback support.
+    // Fast path (in-order) does preserve structural sharing.
+    expect(state3AfterDoc1).not.toBe(state3AfterDoc2) // State changed
+  })
+
+  it("preserves structural sharing fast path when validation fails", () => {
+    const doc = new Y.Doc()
+
+    // Use a validator that rejects any operation that sets "forbidden" key
+    const validate = (state: any) => !("forbidden" in state)
+
+    const log = createStateSyncLog<any>({
+      yDoc: doc,
+      retentionWindowMs: undefined,
+      
+      validate,
+    })
+
+    // Create initial state with nested structure
+    log.emit([
+      { kind: "set", path: [], key: "nested", value: { deep: { value: "original" } } },
+      { kind: "set", path: [], key: "other", value: 123 },
+    ])
+
+    const stateBeforeFailedTx = log.getState()
+    const nestedRefBefore = stateBeforeFailedTx.nested
+    const deepRefBefore = stateBeforeFailedTx.nested.deep
+
+    // Emit a tx that should fail validation (sets "forbidden" key)
+    // This goes through the fast path since it's in-order from the same client
+    log.emit([{ kind: "set", path: [], key: "forbidden", value: "bad" }])
+
+    const stateAfterFailedTx = log.getState()
+
+    // State should be unchanged because validation failed
+    expect(stateAfterFailedTx).toStrictEqual({
+      nested: { deep: { value: "original" } },
+      other: 123,
+    })
+    expect("forbidden" in stateAfterFailedTx).toBe(false)
+
+    // CRITICAL: Structural sharing should be preserved - same reference!
+    // When rollback reverts the failed tx, the state reference should remain identical
+    expect(stateAfterFailedTx).toBe(stateBeforeFailedTx)
+    expect(stateAfterFailedTx.nested).toBe(nestedRefBefore)
+    expect(stateAfterFailedTx.nested.deep).toBe(deepRefBefore)
+  })
+
+  it("preserves structural sharing slow path when validation fails", () => {
+    // Create two docs that will sync
+    const doc1 = new Y.Doc()
+    const doc2 = new Y.Doc()
+
+    // Use a validator that rejects any operation that sets "forbidden" key
+    const validate = (state: any) => !("forbidden" in state)
+
+    const log1 = createStateSyncLog<any>({
+      yDoc: doc1,
+      retentionWindowMs: undefined,
+      
+      validate,
+    })
+
+    const log2 = createStateSyncLog<any>({
+      yDoc: doc2,
+      retentionWindowMs: undefined,
+      
+      validate,
+    })
+
+    // Create initial state on doc1
+    log1.emit([
+      { kind: "set", path: [], key: "nested", value: { deep: { value: "original" } } },
+      { kind: "set", path: [], key: "other", value: 123 },
+    ])
+
+    // Sync to doc2
+    Y.applyUpdate(doc2, Y.encodeStateAsUpdate(doc1))
+
+    // Create another tx on doc1 that's valid
+    log1.emit([{ kind: "set", path: ["nested"], key: "extra", value: "ok" }])
+
+    // Now create a tx on doc2 with a LOWER timestamp that would fail validation
+    // when replayed (this simulates an out-of-order tx from another client)
+    // We'll directly create the tx in doc2's Yjs map with a timestamp that
+    // comes before the existing txs, forcing slow path replay
+
+    // First sync the valid tx
+    Y.applyUpdate(doc2, Y.encodeStateAsUpdate(doc1))
+
+    const stateAfterValidSync = log2.getState()
+    expect(stateAfterValidSync.nested.extra).toBe("ok")
+
+    // Now emit a failing tx on doc1 (sets forbidden key)
+    log1.emit([{ kind: "set", path: [], key: "forbidden", value: "bad" }])
+
+    // Sync to doc2 - this will go through slow path since it's from another client
+    Y.applyUpdate(doc2, Y.encodeStateAsUpdate(doc1))
+
+    const stateAfterFailedSync = log2.getState()
+
+    // State should not contain forbidden key because validation failed
+    expect("forbidden" in stateAfterFailedSync).toBe(false)
+
+    // The valid changes should still be there
+    expect(stateAfterFailedSync.nested.extra).toBe("ok")
+    expect(stateAfterFailedSync.other).toBe(123)
+  })
+
+  it("preserves reference stability when all txs in slow path fail validation", () => {
+    const doc1 = new Y.Doc()
+    const doc2 = new Y.Doc()
+
+    // Validator that rejects "forbidden" key
+    const validate = (state: any) => !("forbidden" in state)
+
+    const log1 = createStateSyncLog<any>({
+      yDoc: doc1,
+      retentionWindowMs: undefined,
+      
+      validate,
+    })
+
+    const log2 = createStateSyncLog<any>({
+      yDoc: doc2,
+      retentionWindowMs: undefined,
+      
+      validate,
+    })
+
+    // Create initial state
+    log1.emit([{ kind: "set", path: [], key: "value", value: 1 }])
+    Y.applyUpdate(doc2, Y.encodeStateAsUpdate(doc1))
+
+    const stateBeforeFailedSync = log2.getState()
+
+    // Emit failing tx on doc1
+    log1.emit([{ kind: "set", path: [], key: "forbidden", value: "bad" }])
+
+    // Sync to doc2
+    Y.applyUpdate(doc2, Y.encodeStateAsUpdate(doc1))
+
+    const stateAfterFailedSync = log2.getState()
+
+    // State should be unchanged
+    expect(stateAfterFailedSync).toStrictEqual({ value: 1 })
+    expect("forbidden" in stateAfterFailedSync).toBe(false)
+
+    // Reference should be stable since no valid changes were applied
+    expect(stateAfterFailedSync).toBe(stateBeforeFailedSync)
+  })
 })

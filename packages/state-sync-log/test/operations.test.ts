@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
-import { createStateSyncLog } from "../src/index"
-import { applyTx, Op } from "../src/operations"
+import { applyOps, createStateSyncLog, type Op } from "../src/index"
 import { compareTxTimestamps, parseTxTimestampKey } from "../src/txTimestamp"
 
 describe("Operations", () => {
@@ -191,20 +190,89 @@ describe("Operations", () => {
     const ts = { epoch: 1, clock: 1, clientId: "A", wallClock: 100 }
     expect(compareTxTimestamps(ts, ts)).toBe(0)
   })
+})
 
-  it("throws on resolvePath out of bounds array access", () => {
-    const state = { arr: [] }
-    const op: Op = { kind: "set", path: ["arr", 100], key: "0", value: 1 }
-    // applyTx catches errors and returns null on failure
-    const newState = applyTx(state, [op])
-    expect(newState).toBeNull()
+describe("applyOps", () => {
+  it("clones values by default", () => {
+    const target: any = {}
+    const valueToSet = { nested: { deep: 1 } }
+    const ops: Op[] = [{ kind: "set", path: [], key: "x", value: valueToSet }]
+
+    applyOps(ops, target)
+
+    // Value should be cloned
+    expect(target.x).not.toBe(valueToSet)
+    expect(target.x.nested).not.toBe(valueToSet.nested)
+    expect(target.x).toStrictEqual(valueToSet)
   })
 
-  it("throws on resolvePath invalid path types", () => {
-    // Path segment string on array
-    const state = { arr: [1] }
-    const op: Op = { kind: "set", path: ["arr", "invalid"], key: "0", value: 1 }
-    const newState = applyTx(state, [op])
-    expect(newState).toBeNull()
+  it("clones values when cloneValues is true", () => {
+    const target: any = {}
+    const valueToSet = { nested: { deep: 1 } }
+    const ops: Op[] = [{ kind: "set", path: [], key: "x", value: valueToSet }]
+
+    applyOps(ops, target, { cloneValues: true })
+
+    // Value should be cloned
+    expect(target.x).not.toBe(valueToSet)
+    expect(target.x).toStrictEqual(valueToSet)
+  })
+
+  it("uses values directly when cloneValues is false", () => {
+    const target: any = {}
+    const valueToSet = { nested: { deep: 1 } }
+    const ops: Op[] = [{ kind: "set", path: [], key: "x", value: valueToSet }]
+
+    applyOps(ops, target, { cloneValues: false })
+
+    // Value should be used directly (same reference)
+    expect(target.x).toBe(valueToSet)
+    expect(target.x.nested).toBe(valueToSet.nested)
+  })
+
+  it("clones splice inserts by default", () => {
+    const target: any = { arr: [] }
+    const objToInsert = { id: 1 }
+    const ops: Op[] = [
+      { kind: "splice", path: ["arr"], index: 0, deleteCount: 0, inserts: [objToInsert] },
+    ]
+
+    applyOps(ops, target)
+
+    expect(target.arr[0]).not.toBe(objToInsert)
+    expect(target.arr[0]).toStrictEqual(objToInsert)
+  })
+
+  it("uses splice inserts directly when cloneValues is false", () => {
+    const target: any = { arr: [] }
+    const objToInsert = { id: 1 }
+    const ops: Op[] = [
+      { kind: "splice", path: ["arr"], index: 0, deleteCount: 0, inserts: [objToInsert] },
+    ]
+
+    applyOps(ops, target, { cloneValues: false })
+
+    expect(target.arr[0]).toBe(objToInsert)
+  })
+
+  it("clones addToSet values by default", () => {
+    const target: any = { set: [] }
+    const objToAdd = { id: 1 }
+    const ops: Op[] = [{ kind: "addToSet", path: ["set"], value: objToAdd }]
+
+    applyOps(ops, target)
+
+    expect(target.set[0]).not.toBe(objToAdd)
+    expect(target.set[0]).toStrictEqual(objToAdd)
+  })
+
+  it("uses addToSet values directly when cloneValues is false", () => {
+    const target: any = { set: [] }
+    const objToAdd = { id: 1 }
+    const ops: Op[] = [{ kind: "addToSet", path: ["set"], value: objToAdd }]
+
+    applyOps(ops, target, { cloneValues: false })
+
+    expect(target.set[0]).toBe(objToAdd)
   })
 })

@@ -29,7 +29,12 @@ export function isObject(value: unknown): value is object {
 
 /**
  * Deep clones a JSON-serializable value.
+ * Optimized: primitives are returned as-is.
  */
 export function deepClone<T>(value: T): T {
+  // Primitives don't need cloning
+  if (value === null || typeof value !== "object") {
+    return value
+  }
   return clone(value)
 }

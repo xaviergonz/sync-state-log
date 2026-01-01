@@ -8,14 +8,6 @@ do
    echo "--------------------------------------------------"
    echo "Run #$i"
    echo "--------------------------------------------------"
-   if (( i % 2 == 0 )); then
-      export IMMUTABLE_MODE="true"
-      echo "Mode: Immutable"
-   else
-      export IMMUTABLE_MODE="false"
-      echo "Mode: Mutable"
-   fi
-
    pnpm test fuzzySync
 done
 

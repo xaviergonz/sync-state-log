@@ -2,10 +2,9 @@ import * as Y from "yjs"
 import { type CheckpointRecord, type ClientWatermarks, pruneCheckpoints } from "./checkpoints"
 import { getFinalizedEpochAndCheckpoint } from "./checkpointUtils"
 import { ClientState, insertIntoSortedCache, removeFromSortedCache } from "./clientState"
+import { applyTxsImmutable } from "./draft"
 import { JSONObject } from "./json"
-
-import { applyTx, Op } from "./operations"
-
+import { Op } from "./operations"
 import { computeReconcileOps } from "./reconcile"
 import { SortedTxEntry } from "./SortedTxEntry"
 import { TxRecord } from "./TxRecord"
@@ -69,6 +68,8 @@ export function appendTx(
  * Re-emits missed transactions and prunes old ones.
  *
  * Should be called BEFORE updateState to ensure log is clean and complete.
+ *
+ * @returns true if any transactions were re-emitted or deleted, which may invalidate lastAppliedIndex
  */
 function syncLog(
   yTx: Y.Map<TxRecord>,
@@ -77,7 +78,7 @@ function syncLog(
   finalizedEpoch: number,
   baseCP: CheckpointRecord | null,
   newKeys?: readonly TxTimestampKey[] // keys added in this update
-): void {
+): boolean {
   const activeEpoch = finalizedEpoch + 1
   const watermarks = baseCP?.watermarks ?? {}
 
@@ -145,47 +146,45 @@ function syncLog(
     yTx.delete(key)
   }
   removeFromSortedCache(clientState, toDelete)
+
+  // Return true if any changes were made that may invalidate lastAppliedIndex
+  return toReEmit.length > 0 || toDelete.length > 0
 }
 
 /**
- * Internal helper to compute current state from the log (full recompute).
- * Uses cached finalized epoch and checkpoint from clientState.
- * Also populates appliedTxKeys with all dedupKeys.
+ * Internal helper to apply all transactions from the sorted cache to compute state.
+ * This is the core replay loop used by both full recompute and out-of-order replay.
+ * Uses COW (copy-on-write) draft system for efficient immutable updates.
  */
-function computeState(yTx: Y.Map<TxRecord>, clientState: ClientState): JSONObject {
+function applyAllTransactions(clientState: ClientState, baseState: JSONObject): JSONObject {
   const baseCP = clientState.currentBaseCheckpoint
-  let state: JSONObject = baseCP ? structuredClone(baseCP.state) : {}
 
-  clientState.sortedTxs = []
-  clientState.sortedTxsMap.clear()
   clientState.appliedTxKeys.clear()
-
-  for (const key of yTx.keys()) {
-    insertIntoSortedCache(clientState, yTx, key)
-  }
 
   // Check if transaction was already applied in the base checkpoint
   const watermarks = baseCP?.watermarks ?? {}
-  // Fast check for non-empty object (avoids Object.keys allocation)
   let hasWatermarks = false
   for (const _ in watermarks) {
     hasWatermarks = true
     break
   }
 
-  for (const entry of clientState.sortedTxs) {
+  const sortedTxs = clientState.sortedTxs
+  const appliedTxKeys = clientState.appliedTxKeys
+  const validateFn = clientState.validateFn
+
+  // Collect transactions to apply (filtered by dedup and watermarks)
+  const txsToApply: { ops: readonly Op[] }[] = []
+  for (let i = 0, len = sortedTxs.length; i < len; i++) {
+    const entry = sortedTxs[i]
     const dedupKey = entry.dedupTxTimestampKey
 
-    // Skip if already processed (handles duplicates within this loop)
-    if (clientState.appliedTxKeys.has(dedupKey)) {
+    if (appliedTxKeys.has(dedupKey)) {
       continue
     }
 
-    // Mark as processed for fast path deduplication
-    clientState.appliedTxKeys.add(dedupKey)
+    appliedTxKeys.add(dedupKey)
 
-    // Skip if this dedupKey was already applied in the checkpoint
-    // Only parse timestamp if we have watermarks to check against
     if (hasWatermarks) {
       const dedupTs = entry.dedupTxTimestamp
       if (isTransactionInCheckpoint(dedupTs, watermarks)) {
@@ -193,51 +192,44 @@ function computeState(yTx: Y.Map<TxRecord>, clientState: ClientState): JSONObjec
       }
     }
 
-    const newState = applyTx(
-      state,
-      entry.txRecord.ops,
-      clientState.validateFn,
-      clientState.immutable
-    )
-    if (newState) {
-      state = newState
-    }
+    txsToApply.push({ ops: entry.txRecord.ops })
   }
 
-  // Set lastAppliedTs and lastAppliedIndex to the last entry if we have any
-  if (clientState.sortedTxs.length > 0) {
-    clientState.lastAppliedTs = clientState.sortedTxs[clientState.sortedTxs.length - 1].txTimestamp
-    clientState.lastAppliedIndex = clientState.sortedTxs.length - 1
+  // Set lastAppliedTs and lastAppliedIndex
+  if (sortedTxs.length > 0) {
+    clientState.lastAppliedTs = sortedTxs[sortedTxs.length - 1].txTimestamp
+    clientState.lastAppliedIndex = sortedTxs.length - 1
   } else {
     clientState.lastAppliedIndex = -1
   }
 
-  return state
+  if (txsToApply.length === 0) {
+    return baseState
+  }
+
+  // Use custom draft system for copy-on-write immutable updates
+  // Apply all txs using a shared draft context for performance
+  return applyTxsImmutable(baseState, txsToApply, validateFn)
 }
 
 /**
- * Internal helper to compute full state and update cache.
+ * Internal helper to recompute state from transactions.
+ * Assumes the sorted cache is already up-to-date.
  */
-function computeFullState(yTx: Y.Map<TxRecord>, clientState: ClientState): JSONObject {
-  const state = computeState(yTx, clientState)
-  clientState.cachedState = state
-  return state
-}
-
-/**
- * Internal helper to perform a full recompute and return the state and reconciliation ops.
- */
-function handleFullRecompute(
-  yTx: Y.Map<TxRecord>,
-  clientState: ClientState
-): { state: JSONObject; ops: Op[] } {
+function recomputeState(clientState: ClientState): { state: JSONObject; ops: Op[] } {
   const oldState = clientState.cachedState ?? {}
-  clientState.sortedTxs = []
-  clientState.sortedTxsMap.clear()
+
   clientState.lastAppliedTs = null
   clientState.lastAppliedIndex = -1
 
-  const newState = computeFullState(yTx, clientState)
+  // Get base state from checkpoint (draft system handles structural sharing)
+  const baseCP = clientState.currentBaseCheckpoint
+  const baseState: JSONObject = baseCP ? baseCP.state : {}
+
+  // Apply all transactions
+  const newState = applyAllTransactions(clientState, baseState)
+  clientState.cachedState = newState
+
   const ops = computeReconcileOps(oldState, newState)
 
   return { state: newState, ops }
@@ -254,8 +246,7 @@ export function updateState(
   yCheckpoint: Y.Map<CheckpointRecord>,
   myClientId: string,
   clientState: ClientState,
-  txChanges: TxKeyChanges | undefined,
-  immutable = false
+  txChanges: TxKeyChanges | undefined
 ): { state: JSONObject; ops: Op[] } {
   // Always calculate fresh finalized epoch and checkpoint to handle sync race conditions
   const { finalizedEpoch, checkpoint: baseCP } = getFinalizedEpochAndCheckpoint(yCheckpoint)
@@ -274,9 +265,11 @@ export function updateState(
   clientState.cachedFinalizedEpoch = finalizedEpoch
   clientState.currentBaseCheckpoint = baseCP
 
-  // FIRST RUN: Populate sortedTxs immediately if cache is empty
-  // This allows syncLog to use the optimized O(1) sorted path even on first load.
-  if (clientState.cachedState === null) {
+  // Track if we need to rebuild sorted cache (first run or checkpoint changed)
+  const needsRebuildSortedCache =
+    clientState.cachedState === null || canonicalCheckpointChanged || !txChanges
+  // Rebuild sorted cache before syncLog if needed
+  if (needsRebuildSortedCache) {
     clientState.sortedTxs = []
     clientState.sortedTxsMap.clear()
     for (const key of yTx.keys()) {
@@ -285,43 +278,69 @@ export function updateState(
   }
 
   // Sync and prune within transaction
+  let syncLogModifiedCache = false
   doc.transact(() => {
-    syncLog(yTx, myClientId, clientState, finalizedEpoch, baseCP, txChanges?.added)
+    syncLogModifiedCache = syncLog(
+      yTx,
+      myClientId,
+      clientState,
+      finalizedEpoch,
+      baseCP,
+      txChanges?.added
+    )
+
     // Safe to use local finalizedEpoch here
     pruneCheckpoints(yCheckpoint, finalizedEpoch)
   })
 
-  // Full recompute needed if:
-  // - First run (no cached state)
-  // - Canonical checkpoint changed
-  // - No txChanges provided (fallback to full scan)
-  const needsFullRecompute =
-    clientState.cachedState === null || canonicalCheckpointChanged || !txChanges
+  // Update sorted cache with new/deleted keys from txChanges
+  // This must happen after syncLog which may have deleted some of these keys
+  // Track out-of-order insertions for fast path
+  let earlyOutOfOrder = false
+  if (txChanges) {
+    // Process deleted keys (syncLog may have deleted more than txChanges.deleted)
+    // The Map was already updated by removeFromSortedCache in syncLog
 
-  if (needsFullRecompute) {
-    return handleFullRecompute(yTx, clientState)
-  }
-
-  // FAST PATH: Incremental update using only changed keys
-  let outOfOrder = false
-
-  // Process deleted keys
-  removeFromSortedCache(clientState, txChanges.deleted)
-
-  // Process added keys
-  for (const key of txChanges.added) {
-    // CRITICAL: Check yTx.has(key)! syncLog might have just pruned it.
-    if (yTx.has(key) && !clientState.sortedTxsMap.has(key)) {
-      if (insertIntoSortedCache(clientState, yTx, key)) {
-        outOfOrder = true
+    // Process added keys
+    for (const key of txChanges.added) {
+      // CRITICAL: Check yTx.has(key)! syncLog might have just pruned it.
+      if (yTx.has(key) && !clientState.sortedTxsMap.has(key)) {
+        if (insertIntoSortedCache(clientState, yTx, key)) {
+          earlyOutOfOrder = true
+        }
       }
     }
   }
 
-  // Out-of-order arrival detected - need full replay
-  if (outOfOrder) {
-    return handleFullRecompute(yTx, clientState)
+  if (needsRebuildSortedCache) {
+    // SLOW PATH: Full recompute
+    return recomputeState(clientState)
   }
+
+  // SEMI FAST PATH: Incremental update using only changed keys
+
+  // Process deleted keys first
+  const deletedCount = removeFromSortedCache(clientState, txChanges.deleted)
+
+  // If any keys were deleted from yTx, we need to recompute state.
+  // This is because the deleted transactions might have been applied before,
+  // and we can't incrementally "unapply" them - we need a full replay.
+  const hasDeletedTx = deletedCount > 0
+
+  // syncLog may have deleted/re-emitted transactions, invalidating lastAppliedIndex
+  // Also check for out-of-order insertions from early insert loop
+  // Also trigger recompute if transactions were deleted from yTx
+  const outOfOrder = earlyOutOfOrder || syncLogModifiedCache || hasDeletedTx
+
+  // NOTE: Added keys are already in cache from early insert above
+  // The early insert loop handles all txChanges.added keys before we reach this point
+
+  // Out-of-order arrival detected - use optimized replay (reuses sorted cache)
+  if (outOfOrder) {
+    return recomputeState(clientState)
+  }
+
+  // FAST PATH: Updates that are added in-order at the end of the log
 
   // Apply pending transactions - O(1) optimization: start from lastAppliedIndex + 1
   let state = clientState.cachedState as JSONObject
@@ -341,8 +360,11 @@ export function updateState(
     }
 
     const tx = entry.txRecord
-    const newState = applyTx(state, tx.ops, clientState.validateFn, immutable)
-    if (newState) {
+
+    // Use custom draft system for copy-on-write
+    // applyTxsImmutable returns the original state if validation fails
+    const newState = applyTxsImmutable(state, [tx], clientState.validateFn)
+    if (newState !== state) {
       state = newState
       appliedOps.push(...tx.ops)
     }

@@ -11,7 +11,7 @@ import { SortedTxEntry } from "./SortedTxEntry"
 import { TxRecord } from "./TxRecord"
 import { appendTx, TxKeyChanges, updateState } from "./txLog"
 import { TxTimestampKey } from "./txTimestamp"
-import { deepClone, generateID } from "./utils"
+import { generateID } from "./utils"
 
 export const getSortedTxsSymbol = Symbol("getSortedTxs")
 
@@ -62,20 +62,11 @@ export interface StateSyncLogOptions<State extends JSONObject> {
    * Recommended: 14 days (1209600000 ms).
    */
   retentionWindowMs: number | undefined
-
-  /**
-   * If true, keeps state immutable (using Mutative/Proxies).
-   * If false (default), uses mutable state with rollback for higher performance.
-   *
-   * - Use `true` if you rely on reference equality (e.g. React.memo, Redux).
-   * - Use `false` if you want maximum write throughput.
-   */
-  immutable?: boolean
 }
 
 export interface StateSyncLogController<State extends JSONObject> {
   /**
-   * Returns the current immutable state.
+   * Returns the current state.
    */
   getState(): State
 
@@ -146,7 +137,6 @@ export function createStateSyncLog<State extends JSONObject>(
     yjsOrigin,
     validate,
     retentionWindowMs,
-    immutable = false,
   } = options
 
   if (clientId.includes(";")) {
@@ -159,8 +149,7 @@ export function createStateSyncLog<State extends JSONObject>(
   // Cast validate to basic type to match internal ClientState
   const clientState = createClientState(
     validate as unknown as ValidateFn<JSONObject>,
-    retentionWindowMs ?? Number.POSITIVE_INFINITY,
-    immutable
+    retentionWindowMs ?? Number.POSITIVE_INFINITY
   )
 
   // Listeners
@@ -196,15 +185,7 @@ export function createStateSyncLog<State extends JSONObject>(
 
   // Update Logic with incremental changes
   const runUpdate = (txChanges: TxKeyChanges | undefined) => {
-    const { state, ops } = updateState(
-      yDoc,
-      yTx,
-      yCheckpoint,
-      clientId,
-      clientState,
-      txChanges,
-      immutable
-    )
+    const { state, ops } = updateState(yDoc, yTx, yCheckpoint, clientId, clientState, txChanges)
     if (ops.length > 0) {
       notifySubscribers(state as State, ops)
     }
@@ -282,14 +263,7 @@ export function createStateSyncLog<State extends JSONObject>(
       yDoc.transact(() => {
         const activeEpoch = getActiveEpochInternal()
         const currentState = clientState.cachedState ?? {}
-        createCheckpoint(
-          yTx,
-          yCheckpoint,
-          clientState,
-          activeEpoch,
-          immutable ? currentState : deepClone(currentState),
-          clientId
-        )
+        createCheckpoint(yTx, yCheckpoint, clientState, activeEpoch, currentState, clientId)
       }, yjsOrigin)
     },
 
