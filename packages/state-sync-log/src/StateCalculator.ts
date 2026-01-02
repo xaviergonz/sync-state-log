@@ -1,6 +1,6 @@
 import type * as Y from "yjs"
 import { type CheckpointRecord, type ClientWatermarks } from "./checkpoints"
-import { applyTxsImmutable } from "./draft"
+import { applyTxImmutable } from "./draft"
 import { JSONObject } from "./json"
 import { Op, ValidateFn } from "./operations"
 import { computeReconcileOps } from "./reconcile"
@@ -339,8 +339,9 @@ export class StateCalculator {
 
       const tx = entry.txRecord
 
-      // Apply transaction
-      const newState = applyTxsImmutable(state, [tx], this.validateFn)
+      // Apply transaction 1-by-1 to avoid draft context pollution on validation failure
+      const newState = applyTxImmutable(state, tx, this.validateFn)
+
       if (newState !== state) {
         state = newState
         if (returnOps) {

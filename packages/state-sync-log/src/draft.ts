@@ -1,6 +1,7 @@
 import { failure } from "./error"
 import type { JSONObject, JSONRecord, JSONValue, Path } from "./json"
 import type { Op, ValidateFn } from "./operations"
+import { TxRecord } from "./TxRecord"
 import { deepEqual, isObject } from "./utils"
 
 /**
@@ -250,56 +251,38 @@ export function applyOpToDraft<T extends JSONObject>(ctx: DraftContext<T>, op: O
 }
 
 /**
- * Applies one or more transactions to a base state immutably.
+ * Applies a single transaction to a base state immutably.
  *
  * Key benefits over Mutative/Immer:
  * - No proxy overhead - direct object access and copy-on-write cloning
  * - Structural sharing - unchanged subtrees keep their references
  * - Zero-copy on failure - if validation fails, returns original base unchanged
- * - Efficient batch processing - reuses draft context across transactions
  *
  * @param base - The base state (never mutated)
- * @param txs - Array of transactions (each tx is a list of operations)
- * @param validateFn - Optional validation function (applied per-tx)
- * @returns The final state after all valid transactions are applied
+ * @param tx - The transaction to apply
+ * @param validateFn - Optional validation function
+ * @returns The final state (if valid) or the original base (if invalid or empty)
  */
-export function applyTxsImmutable<T extends JSONObject>(
+export function applyTxImmutable<T extends JSONObject>(
   base: T,
-  txs: readonly { ops: readonly Op[] }[],
+  tx: Pick<TxRecord, "ops">,
   validateFn?: ValidateFn<T>
 ): T {
-  if (txs.length === 0) return base
+  if (tx.ops.length === 0) return base
 
-  // Create a single draft context for all transactions
   const ctx = createDraft(base)
-  let anyTxApplied = false
 
-  for (const tx of txs) {
-    // Save current root in case we need to revert this tx
-    const rootBeforeTx = ctx.root
-
-    try {
-      // Apply all ops in this tx
-      for (const op of tx.ops) {
-        applyOpToDraft(ctx, op)
-      }
-
-      // Validate if needed
-      if (validateFn && !validateFn(ctx.root)) {
-        // Validation failed - revert to state before this tx
-        // Since we use COW, rootBeforeTx still has the old state
-        ctx.root = rootBeforeTx
-      } else {
-        // Transaction succeeded (validation passed or not needed)
-        anyTxApplied = true
-      }
-    } catch {
-      // Operation failed - revert to state before this tx
-      ctx.root = rootBeforeTx
+  try {
+    for (const op of tx.ops) {
+      applyOpToDraft(ctx, op)
     }
-  }
 
-  // If no transactions were applied, return the original base unchanged
-  // This preserves reference identity when all txs fail validation
-  return anyTxApplied ? ctx.root : base
+    if (validateFn && !validateFn(ctx.root)) {
+      return base
+    }
+
+    return ctx.root
+  } catch {
+    return base
+  }
 }
