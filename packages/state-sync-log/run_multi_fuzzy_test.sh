@@ -7,13 +7,16 @@ trap "rm -f .test_runner.sh .fail_marker .fail_output; exit" INT
 rm -f .fail_marker .fail_output
 
 # Configuration
-RUNS=1000
+RUNS=10000
 
 # Create helper script
 cat << 'EOF' > .test_runner.sh
 #!/bin/bash
 # Exit fast if global failure already happened
 if [ -f .fail_marker ]; then exit 0; fi
+
+ITER=$1
+export FUZZY_REPLAY_FILE="fuzzy_failure_${ITER}.json"
 
 # Run the test
 OUT=$(pnpm test fuzzySync 2>&1)
@@ -63,16 +66,12 @@ while read line; do
         # Kill the loop and exit with error
         # We also want to stop xargs if possible, but exiting the read loop breaks the pipe
         # causing xargs to eventually stop writing and exit.
-        rm -f .test_runner.sh .fail_marker .fail_output
         exit 1
     fi
 done
 
-# Capture the exit code of the pipeline
-PIPE_STATUS=${PIPESTATUS[0]} # This might not work in all shells if not using bash array, but set -e handles it?
-# Actually 'read' loop exit is what we care about mostly.
-# If loop exited 1 (due to our explicit exit), the script should exit.
-# But inside the pipe subshell, exit 1 might not kill the parent script unless we handle it.
+# Capture the exit code of the pipeline and check for failure marker
+# The loop will have exited 1 if a failure was detected and FAIL_TOKEN was received.
 
 if [ -f .fail_marker ]; then
     rm -f .test_runner.sh .fail_marker .fail_output

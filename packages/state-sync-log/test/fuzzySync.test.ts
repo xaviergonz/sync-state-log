@@ -1,17 +1,14 @@
 import * as fs from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { nanoid } from "nanoid"
 import { describe, expect, it } from "vitest"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 import * as Y from "yjs"
-import {
-  createStateSyncLog,
-  getSortedTxsSymbol,
-  type StateSyncLogController,
-} from "../src/createStateSyncLog"
+import { createStateSyncLog, type StateSyncLogController } from "../src/createStateSyncLog"
 
 import type { JSONObject, JSONRecord, JSONValue, Path } from "../src/json"
 import type { Op } from "../src/operations"
@@ -373,7 +370,9 @@ type FuzzyAction =
 describe("Fuzzy Sync", () => {
   it("three clients with random operations, connectivity, and compaction converge", () => {
     // Standardize logPath to the project package root
-    const logPath = path.resolve(__dirname, "../fuzzy_failure.json")
+    const logPath = process.env.FUZZY_REPLAY_FILE
+      ? path.resolve(process.env.FUZZY_REPLAY_FILE)
+      : path.resolve(__dirname, "../fuzzy_failure.json")
     const isReplay = fs.existsSync(logPath)
     const currentRunActions: FuzzyAction[] = []
 
@@ -390,6 +389,12 @@ describe("Fuzzy Sync", () => {
 
     const connected = [false, false, false]
 
+    const recordAndSync = (action: FuzzyAction) => {
+      currentRunActions.push(action)
+      syncConnectedClients(docs, connected)
+      expectConnectedToSync(logs, connected)
+    }
+
     try {
       if (isReplay) {
         console.log(`Replaying from ${logPath}...`)
@@ -398,7 +403,6 @@ describe("Fuzzy Sync", () => {
         let actionIdx = 0
         for (const action of actionsToReplay) {
           console.log(`Action ${actionIdx}: ${action.type}`)
-          currentRunActions.push(action)
           switch (action.type) {
             case "init":
               logs[action.clientIndex].emit(action.ops)
@@ -412,70 +416,11 @@ describe("Fuzzy Sync", () => {
               logs[action.clientIndex].compact()
               break
             case "emit":
-              try {
-                logs[action.clientIndex].emit([action.op])
-              } catch {
-                // Operation might fail due to validation
-              }
+              logs[action.clientIndex].emit([action.op])
               break
           }
 
-          syncConnectedClients(docs, connected)
-
-          if (connected.every(Boolean)) {
-            try {
-              const s0 = logs[0].getState()
-              const s1 = logs[1].getState()
-              const s2 = logs[2].getState()
-              expect(s0).toStrictEqual(s1)
-              expect(s1).toStrictEqual(s2)
-            } catch (e) {
-              console.error(`Divergence detected WHILE CONNECTED at Action ${actionIdx}!`)
-              const getInfo = (idx: number) => {
-                const log = logs[idx]
-                const sortedTxs = log[getSortedTxsSymbol]()
-                return {
-                  clientId: clientIds[idx],
-                  activeEpoch: log.getActiveEpoch(),
-                  txKeysCount: sortedTxs.length,
-                  firstTx: sortedTxs[0]?.txTimestampKey,
-                  lastTx: sortedTxs.slice(-1)[0]?.txTimestampKey,
-                  // Show the full set of canonical keys applied to see which ones are missing/extra
-                  canonicalKeys: sortedTxs.map((t) => t.dedupTxTimestampKey),
-                }
-              }
-              const infoA = getInfo(0)
-              const infoB = getInfo(1)
-              const infoC = getInfo(2)
-              console.error(
-                "Client A Info:",
-                JSON.stringify({ ...infoA, canonicalKeys: undefined }, null, 2)
-              )
-              console.error(
-                "Client B Info:",
-                JSON.stringify({ ...infoB, canonicalKeys: undefined }, null, 2)
-              )
-              console.error(
-                "Client C Info:",
-                JSON.stringify({ ...infoC, canonicalKeys: undefined }, null, 2)
-              )
-
-              // Compare canonical keys
-              const keysA = new Set(infoA.canonicalKeys)
-              const keysB = new Set(infoB.canonicalKeys)
-              const keysC = new Set(infoC.canonicalKeys)
-
-              const onlyA = infoA.canonicalKeys.filter((k) => !keysB.has(k) || !keysC.has(k))
-              const onlyB = infoB.canonicalKeys.filter((k) => !keysA.has(k) || !keysC.has(k))
-              const onlyC = infoC.canonicalKeys.filter((k) => !keysA.has(k) || !keysB.has(k))
-
-              if (onlyA.length > 0) console.error("Keys only on A:", onlyA)
-              if (onlyB.length > 0) console.error("Keys only on B:", onlyB)
-              if (onlyC.length > 0) console.error("Keys only on C:", onlyC)
-
-              throw e
-            }
-          }
+          recordAndSync(action)
 
           actionIdx++
         }
@@ -513,7 +458,7 @@ describe("Fuzzy Sync", () => {
             },
           ]
           logs[i].emit(ops)
-          currentRunActions.push({ type: "init", clientIndex: i, ops })
+          recordAndSync({ type: "init", clientIndex: i, ops })
         }
 
         const totalOps = OPS_PER_CLIENT * 3
@@ -525,59 +470,36 @@ describe("Fuzzy Sync", () => {
           if (Math.random() < 1 / CONNECT_DISCONNECT_RATIO) {
             const targetClient = randomInt(0, 2)
             connected[targetClient] = !connected[targetClient]
-            syncConnectedClients(docs, connected)
-            currentRunActions.push({ type: "network", connected: [...connected] })
+            recordAndSync({ type: "network", connected: [...connected] })
           }
 
           if (Math.random() < 1 / COMPACT_RATIO) {
             logs[clientIndex].compact()
-            expectConnectedToSync(logs, connected)
-            currentRunActions.push({ type: "compact", clientIndex })
+            recordAndSync({ type: "compact", clientIndex })
           }
 
           const state = logs[clientIndex].getState()
           const op = generateRandomOp(state)
 
           if (op) {
-            try {
-              logs[clientIndex].emit([op])
-              currentRunActions.push({ type: "emit", clientIndex, op })
-            } catch {
-              // Operation might fail due to validation
-            }
+            logs[clientIndex].emit([op])
+            recordAndSync({ type: "emit", clientIndex, op })
           }
 
-          syncConnectedClients(docs, connected)
           opCount++
         }
 
         connected[0] = true
         connected[1] = true
         connected[2] = true
-        syncConnectedClients(docs, connected)
-        currentRunActions.push({ type: "network", connected: [...connected] })
+        recordAndSync({ type: "network", connected: [...connected] })
       }
 
-      // Final synchronization rounds (common to both paths)
-      // Ensure ALL clients are connected before final sync
-      connected[0] = true
-      connected[1] = true
-      connected[2] = true
-      for (let round = 0; round < 10; round++) {
-        syncConnectedClients(docs, connected)
-      }
-
-      const stateA = logs[0].getState()
-      const stateB = logs[1].getState()
-      const stateC = logs[2].getState()
-
-      expect(stateA).toStrictEqual(stateB)
-      expect(stateB).toStrictEqual(stateC)
-
-      // If we reach here, the test passed. Cleanup the failure log if it exists.
+      // If we reach here, the test passed. Rename the failure log to .{nanoid}.bak if it exists.
       if (isReplay && fs.existsSync(logPath)) {
-        fs.unlinkSync(logPath)
-        console.log(`Fuzzy test passed. Deleted ${logPath}.`)
+        const backupPath = `${logPath}.${nanoid()}.bak`
+        fs.renameSync(logPath, backupPath)
+        console.log(`Fuzzy test passed. Renamed ${logPath} to ${backupPath}.`)
       }
     } catch (e) {
       // Only write failure log if one doesn't already exist (preserve original failure)
