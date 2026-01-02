@@ -285,17 +285,12 @@ export function applyTxsImmutable<T extends JSONObject>(
       }
 
       // Validate if needed
-      if (validateFn) {
-        if (!validateFn(ctx.root)) {
-          // Validation failed - revert to state before this tx
-          // Since we use COW, rootBeforeTx still has the old state
-          ctx.root = rootBeforeTx
-        } else {
-          // Transaction succeeded (validation passed)
-          anyTxApplied = true
-        }
+      if (validateFn && !validateFn(ctx.root)) {
+        // Validation failed - revert to state before this tx
+        // Since we use COW, rootBeforeTx still has the old state
+        ctx.root = rootBeforeTx
       } else {
-        // No validation - transaction succeeded
+        // Transaction succeeded (validation passed or not needed)
         anyTxApplied = true
       }
     } catch {
@@ -306,9 +301,5 @@ export function applyTxsImmutable<T extends JSONObject>(
 
   // If no transactions were applied, return the original base unchanged
   // This preserves reference identity when all txs fail validation
-  if (!anyTxApplied) {
-    return base
-  }
-
-  return ctx.root
+  return anyTxApplied ? ctx.root : base
 }
