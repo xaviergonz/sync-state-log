@@ -575,13 +575,13 @@ describe("Fuzzy Sync", () => {
       expect(stateB).toStrictEqual(stateC)
 
       // If we reach here, the test passed. Cleanup the failure log if it exists.
-      if (fs.existsSync(logPath)) {
+      if (isReplay && fs.existsSync(logPath)) {
         fs.unlinkSync(logPath)
         console.log(`Fuzzy test passed. Deleted ${logPath}.`)
       }
     } catch (e) {
       // Only write failure log if one doesn't already exist (preserve original failure)
-      if (!fs.existsSync(logPath)) {
+      if (!isReplay && !fs.existsSync(logPath)) {
         console.error(`Fuzzy test failed! Writing actions log to ${logPath}`)
         fs.writeFileSync(logPath, JSON.stringify(currentRunActions, null, 2))
       } else {
