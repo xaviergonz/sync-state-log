@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
 import { applyOps, createStateSyncLog, type Op } from "../src/index"
-import { compareTxTimestamps, parseTxTimestampKey } from "../src/txTimestamp"
 
 describe("Operations", () => {
   it("handles basic set operations", () => {
@@ -181,15 +180,6 @@ describe("Operations", () => {
 
     expect(log.getState().arr).toStrictEqual(["a", "b", "c"])
   })
-
-  it("throws on malformed timestamp key", () => {
-    expect(() => parseTxTimestampKey("invalid")).toThrow(/Malformed timestamp key/)
-  })
-
-  it("compares identical timestamps correctly", () => {
-    const ts = { epoch: 1, clock: 1, clientId: "A", wallClock: 100 }
-    expect(compareTxTimestamps(ts, ts)).toBe(0)
-  })
 })
 
 describe("applyOps", () => {
@@ -274,5 +264,88 @@ describe("applyOps", () => {
     applyOps(ops, target, { cloneValues: false })
 
     expect(target.set[0]).toBe(objToAdd)
+  })
+})
+
+describe("applyOps validation", () => {
+  it("throws when setting on non-object", () => {
+    const target: any = { arr: [] }
+    const ops: Op[] = [{ kind: "set", path: ["arr"], key: "prop", value: 1 }]
+    expect(() => applyOps(ops, target)).toThrow(/set requires object container/)
+  })
+
+  it("throws when deleting from non-object", () => {
+    const target: any = { arr: [] }
+    const ops: Op[] = [{ kind: "delete", path: ["arr"], key: "prop" }]
+    expect(() => applyOps(ops, target)).toThrow(/delete requires object container/)
+  })
+
+  it("throws when splicing non-array", () => {
+    const target: any = { obj: {} }
+    const ops: Op[] = [{ kind: "splice", path: ["obj"], index: 0, deleteCount: 0, inserts: [] }]
+    expect(() => applyOps(ops, target)).toThrow(/splice requires array container/)
+  })
+
+  it("throws when adding to set on non-array", () => {
+    const target: any = { obj: {} }
+    const ops: any[] = [{ kind: "addToSet", path: ["obj"], value: 1 }]
+    expect(() => applyOps(ops, target)).toThrow(/addToSet requires array container/)
+  })
+
+  it("throws when deleting from set on non-array", () => {
+    const target: any = { obj: {} }
+    const ops: any[] = [{ kind: "deleteFromSet", path: ["obj"], value: 1 }]
+    expect(() => applyOps(ops, target)).toThrow(/deleteFromSet requires array container/)
+  })
+
+  it("throws on unknown op kind", () => {
+    const target: any = {}
+    const ops: any[] = [{ kind: "unknown", path: [], key: "a" }]
+    expect(() => applyOps(ops, target)).toThrow(/Unknown operation kind/)
+  })
+
+  it("throws when path segment is string for array container", () => {
+    const target: any = { arr: [] }
+    const ops: Op[] = [{ kind: "set", path: ["arr", "key"], key: "val", value: 1 }]
+    expect(() => applyOps(ops, target)).toThrow(/Expected object at path segment "key"/)
+  })
+
+  it("throws when path property does not exist", () => {
+    const target: any = { obj: {} }
+    const ops: Op[] = [{ kind: "set", path: ["obj", "missing", "key"], key: "val", value: 1 }]
+    expect(() => applyOps(ops, target)).toThrow(/Property "missing" does not exist/)
+  })
+
+  it("throws when path segment is number for object container", () => {
+    const target: any = { obj: {} }
+    const ops: any[] = [{ kind: "set", path: ["obj", 0], key: "val", value: 1 }]
+    expect(() => applyOps(ops, target)).toThrow(/Expected array at path segment 0/)
+  })
+
+  it("throws when path index is out of bounds", () => {
+    const target: any = { arr: [1] }
+    const ops: any[] = [{ kind: "set", path: ["arr", 5], key: "val", value: 1 }]
+    expect(() => applyOps(ops, target)).toThrow(/Index 5 out of bounds/)
+  })
+})
+
+describe("applyOps success features", () => {
+  it("applies delete operation", () => {
+    const target: any = { a: 1, b: 2 }
+    applyOps([{ kind: "delete", path: [], key: "a" }], target)
+    expect(target).toStrictEqual({ b: 2 })
+    expect(target.a).toBeUndefined()
+  })
+
+  it("applies deleteFromSet operation", () => {
+    const target: any = { arr: ["a", "b", "a"] }
+    applyOps([{ kind: "deleteFromSet", path: ["arr"], value: "a" }], target)
+    expect(target.arr).toStrictEqual(["b"])
+  })
+
+  it("applies splice operation (delete)", () => {
+    const target: any = { arr: [1, 2, 3] }
+    applyOps([{ kind: "splice", path: ["arr"], index: 1, deleteCount: 1, inserts: [] }], target)
+    expect(target.arr).toStrictEqual([1, 3])
   })
 })
