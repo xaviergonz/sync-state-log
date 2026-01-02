@@ -6,6 +6,9 @@ trap "rm -f .test_runner.sh .fail_marker .fail_output; exit" INT
 # Cleanup
 rm -f .fail_marker .fail_output
 
+# Configuration
+RUNS=1000
+
 # Create helper script
 cat << 'EOF' > .test_runner.sh
 #!/bin/bash
@@ -39,16 +42,16 @@ else
   CORES=$((MAX_CORES - 1))
 fi
 
-echo "Starting 1000 fuzzy sync test runs using $CORES parallel processes..."
+echo "Starting $RUNS fuzzy sync test runs using $CORES parallel processes..."
 
 # Run xargs and pipe output to a loop for counting
 # Process substitution or pipe used to maintain counter state
-seq 1 1000 | xargs -P "$CORES" -I {} ./.test_runner.sh {} | \
+seq 1 "$RUNS" | xargs -P "$CORES" -I {} ./.test_runner.sh {} | \
 while read line; do
     if [ "$line" == "OK_TOKEN" ]; then
         count=$((count + 1))
         # Print progress, overwriting the line
-        printf "\r%d/1000" "$count"
+        printf "\r%d/%d" "$count" "$RUNS"
     elif [ "$line" == "FAIL_TOKEN" ]; then
         echo ""
         echo "--------------------------------------------------"
@@ -77,6 +80,6 @@ if [ -f .fail_marker ]; then
 fi
 
 echo ""
-echo "✅ All 1000 runs passed successfully!"
+echo "✅ All $RUNS runs passed successfully!"
 rm -f .test_runner.sh .fail_marker .fail_output
 exit 0
