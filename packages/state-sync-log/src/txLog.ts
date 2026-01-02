@@ -163,14 +163,20 @@ export function updateState(
   clientState.cachedFinalizedEpoch = finalizedEpoch
 
   // Set base checkpoint (this handles invalidation if checkpoint changed)
-  const checkpointChanged = calc.setBaseCheckpoint(baseCP)
+  calc.setBaseCheckpoint(baseCP)
 
-  // Track if we need to rebuild sorted cache (first run or checkpoint changed)
-  const needsRebuildSortedCache = calc.getCachedState() === null || checkpointChanged || !txChanges
+  // Track if we need to rebuild sorted cache (first run or missing delta)
+  // Optimization: We don't need to rebuild just because checkpoint changed,
+  // as long as we have txChanges to keep cache in sync.
+  const needsRebuildSortedCache = calc.getCachedState() === null || !txChanges
 
   // Rebuild sorted cache before syncLog if needed
   if (needsRebuildSortedCache) {
     calc.rebuildFromYjs(yTx)
+  } else {
+    // If not rebuilding, immediately process deletions to avoid "ghost" transactions
+    // in syncLog (e.g. attempting to access a transaction that was just deleted).
+    calc.removeTxs(txChanges.deleted)
   }
 
   // Sync and prune within transaction
@@ -197,9 +203,6 @@ export function updateState(
       calc.insertTx(key, yTx)
     }
   }
-
-  // Process deleted keys
-  calc.removeTxs(txChanges.deleted)
 
   return calc.calculateState()
 }

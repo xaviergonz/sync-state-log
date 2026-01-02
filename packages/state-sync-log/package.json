@@ -62,7 +62,7 @@
     "copy-root-files": "shx cp ../../README.md . && shx cp ../../LICENSE . && shx cp ../../CHANGELOG.md .",
     "build": "pnpm quick-build && pnpm copy-root-files && shx rm -rf dist && vite build && shx cp dist/state-sync-log.esm.mjs dist/state-sync-log.esm.js",
     "test": "vitest run",
-    "test:ci": "vitest run --coverage",
+    "test:ci": "vitest run --coverage --exclude **/fuzzySync.test.ts",
     "test:fuzzy-loop": "./run_fuzzy_1000.sh",
     "build-docs": "shx rm -rf api-docs && typedoc --options ./typedocconfig.js src/index.ts"
   },
