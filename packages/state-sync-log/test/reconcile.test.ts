@@ -126,4 +126,65 @@ describe("Reconcile", () => {
     const ops = computeReconcileOps(obj, obj)
     expect(ops).toStrictEqual([])
   })
+
+  describe("undefined property support", () => {
+    it("generates set op for undefined value (not delete)", () => {
+      const current = { a: 1, b: 2 }
+      const target = { a: 1, b: undefined }
+
+      const ops = computeReconcileOps(current, target)
+
+      expect(ops).toHaveLength(1)
+      expect(ops[0]).toEqual({ kind: "set", path: [], key: "b", value: undefined })
+    })
+
+    it("generates delete op when property is actually removed", () => {
+      const current = { a: 1, b: undefined }
+      const target = { a: 1 }
+
+      const ops = computeReconcileOps(current, target)
+
+      expect(ops).toHaveLength(1)
+      expect(ops[0]).toEqual({ kind: "delete", path: [], key: "b" })
+    })
+
+    it("setting property to undefined preserves property in state", () => {
+      const doc = new Y.Doc()
+      const log = createStateSyncLog<any>({ yDoc: doc, retentionWindowMs: undefined })
+
+      log.reconcileState({ a: 1, b: 2 })
+      log.reconcileState({ a: 1, b: undefined })
+
+      const state = log.getState()
+      expect("b" in state).toBe(true)
+      expect(state.b).toBe(undefined)
+      expect(Object.keys(state)).toEqual(["a", "b"])
+    })
+
+    it("deleting property removes it from state", () => {
+      const doc = new Y.Doc()
+      const log = createStateSyncLog<any>({ yDoc: doc, retentionWindowMs: undefined })
+
+      log.reconcileState({ a: 1, b: undefined })
+      expect("b" in log.getState()).toBe(true)
+
+      log.reconcileState({ a: 1 })
+
+      const state = log.getState()
+      expect("b" in state).toBe(false)
+      expect(Object.keys(state)).toEqual(["a"])
+    })
+
+    it("emit set operation with undefined value", () => {
+      const doc = new Y.Doc()
+      const log = createStateSyncLog<any>({ yDoc: doc, retentionWindowMs: undefined })
+
+      log.reconcileState({ a: 1, b: 2 })
+      log.emit([{ kind: "set", path: [], key: "b", value: undefined }])
+
+      const state = log.getState()
+      expect("b" in state).toBe(true)
+      expect(state.b).toBe(undefined)
+    })
+  })
 })

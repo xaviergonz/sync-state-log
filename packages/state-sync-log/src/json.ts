@@ -6,8 +6,10 @@ export type Path = readonly (string | number)[]
 
 /**
  * A JSON primitive.
+ * Note: `undefined` is supported for object properties only. Arrays cannot contain undefined
+ * due to Yjs limitations (Y.Array throws on undefined values).
  */
-export type JSONPrimitive = null | boolean | number | string
+export type JSONPrimitive = undefined | null | boolean | number | string
 
 /**
  * A JSON record.
