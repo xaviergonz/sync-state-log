@@ -73,16 +73,18 @@ function applyOp(state: JSONObject, op: Op, cloneValues: boolean): void {
 
   switch (op.kind) {
     case "set":
-      if (!isObject(container) || Array.isArray(container)) {
-        failure("set requires object container")
+      // Allow object or array container
+      if (!isObject(container)) {
+        failure("set requires object or array container")
       }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ;(container as any)[op.key] = cloneValues ? deepClone(op.value) : op.value
       break
 
     case "delete":
-      if (!isObject(container) || Array.isArray(container)) {
-        failure("delete requires object container")
+      // Allow object or array (sparse delete?)
+      if (!isObject(container)) {
+        failure("delete requires object or array container")
       }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       delete (container as any)[op.key]
