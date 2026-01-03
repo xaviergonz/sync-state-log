@@ -101,6 +101,7 @@ log.emit([
 - [Installation](#installation)
 - [API Reference](#api-reference)
 - [Operations](#operations)
+- [Generating Operations with createOps](#generating-operations-with-createops)
 - [Gotchas & Limitations](#gotchas--limitations)
 - [Contributing](#contributing)
 - [License](#license)
@@ -261,6 +262,96 @@ Removes an item if it exists.
 
 ```ts
 { kind: "deleteFromSet", path: ["tags"], value: "deprecated" }
+```
+
+## Generating Operations with `createOps`
+
+Writing operations by hand can be tedious and error-prone. The `createOps` utility lets you describe changes using familiar mutable-style JavaScript code, and it automatically generates the corresponding operations.
+
+### Basic Usage
+
+```ts
+import { createOps } from "state-sync-log/createOps"
+
+const state = { list: [{ text: "Learn", done: false }] }
+
+const { nextState, ops } = createOps(state, (draft) => {
+  // Mutate the draft like you would a normal object
+  draft.list[0].done = true
+  draft.list.push({ text: "Practice", done: false })
+})
+
+// ops contains the operations that were performed:
+// [
+//   { kind: 'set', path: ['list', 0], key: 'done', value: true },
+//   { kind: 'splice', path: ['list'], index: 1, deleteCount: 0, inserts: [{ text: 'Practice', done: false }] }
+// ]
+
+// nextState is the new immutable state (original state is unchanged)
+```
+
+### Supported Mutations
+
+- **Object properties**: `draft.user.name = "Alice"` generates a `set` op
+- **Delete properties**: `delete draft.user.avatar` generates a `delete` op
+- **Array methods**: `push`, `pop`, `shift`, `unshift`, `splice`, `fill`, `sort`, `reverse`, `copyWithin` all generate `splice` ops
+- **Array index assignment**: `draft.list[0] = newItem` generates a `set` op
+- **Array length**: `draft.list.length = 5` generates a `set` op for length
+
+### Utility Functions
+
+#### `original(draft)`
+
+Returns the original (unmodified) value from a draft. Useful for comparisons.
+
+```ts
+import { createOps, original } from "state-sync-log/createOps"
+
+createOps(state, (draft) => {
+  if (original(draft.user) !== draft.user) {
+    console.log("User was modified")
+  }
+})
+```
+
+#### `current(draft)`
+
+Returns a snapshot of the current state of the draft (deep clone).
+
+```ts
+import { createOps, current } from "state-sync-log/createOps"
+
+createOps(state, (draft) => {
+  draft.count++
+  console.log(current(draft)) // { count: 1 }
+})
+```
+
+#### `isDraft(value)` / `isDraftable(value)`
+
+Check if a value is a draft or can be made into one.
+
+```ts
+import { isDraft, isDraftable } from "state-sync-log/createOps"
+
+isDraft(someDraft) // true for draft proxies
+isDraftable({ a: 1 }) // true for plain objects/arrays
+isDraftable(new Date()) // false for class instances
+```
+
+#### `addToSet(draft, path, value)` / `deleteFromSet(draft, path, value)`
+
+Helpers for treating arrays as sets (no duplicates).
+
+```ts
+import { createOps, addToSet, deleteFromSet } from "state-sync-log/createOps"
+
+const { ops } = createOps({ tags: ["a", "b"] }, (draft) => {
+  addToSet(draft, ["tags"], "c") // Adds "c" since it doesn't exist
+  addToSet(draft, ["tags"], "a") // No-op, "a" already exists
+  deleteFromSet(draft, ["tags"], "b") // Removes "b"
+})
+// ops: [{ kind: 'addToSet', ... }, { kind: 'deleteFromSet', ... }]
 ```
 
 ## Gotchas & Limitations

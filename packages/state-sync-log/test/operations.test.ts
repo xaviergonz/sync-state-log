@@ -268,16 +268,41 @@ describe("applyOps", () => {
 })
 
 describe("applyOps validation", () => {
-  it("throws when setting on non-object", () => {
-    const target: any = { arr: [] }
-    const ops: Op[] = [{ kind: "set", path: ["arr"], key: "prop", value: 1 }]
-    expect(() => applyOps(ops, target)).toThrow(/set requires object container/)
+  it("allows setting on array (index or length)", () => {
+    const target: any = { arr: [1, 2, 3] }
+    const ops: Op[] = [{ kind: "set", path: ["arr"], key: 1, value: 99 }]
+    applyOps(ops, target)
+    expect(target.arr[1]).toBe(99)
   })
 
-  it("throws when deleting from non-object", () => {
-    const target: any = { arr: [] }
-    const ops: Op[] = [{ kind: "delete", path: ["arr"], key: "prop" }]
-    expect(() => applyOps(ops, target)).toThrow(/delete requires object container/)
+  it("allows deleting from array", () => {
+    const target: any = { arr: [1, 2, 3] }
+    const ops: Op[] = [{ kind: "delete", path: ["arr"], key: 1 }]
+    applyOps(ops, target)
+    expect(target.arr[1]).toBeUndefined()
+  })
+
+  it("sets array length to truncate", () => {
+    const target: any = { arr: [1, 2, 3, 4, 5] }
+    const ops: Op[] = [{ kind: "set", path: ["arr"], key: "length", value: 2 }]
+    applyOps(ops, target)
+    expect(target.arr).toEqual([1, 2])
+  })
+
+  it("sets array length to expand", () => {
+    const target: any = { arr: [1, 2] }
+    const ops: Op[] = [{ kind: "set", path: ["arr"], key: "length", value: 4 }]
+    applyOps(ops, target)
+    expect(target.arr.length).toBe(4)
+    expect(target.arr[2]).toBeUndefined()
+    expect(target.arr[3]).toBeUndefined()
+  })
+
+  it("sets nested array element", () => {
+    const target: any = { outer: { arr: [{ a: 1 }, { a: 2 }] } }
+    const ops: Op[] = [{ kind: "set", path: ["outer", "arr"], key: 0, value: { a: 99 } }]
+    applyOps(ops, target)
+    expect(target.outer.arr[0]).toEqual({ a: 99 })
   })
 
   it("throws when splicing non-array", () => {
@@ -327,6 +352,42 @@ describe("applyOps validation", () => {
     const ops: any[] = [{ kind: "set", path: ["arr", 5], key: "val", value: 1 }]
     expect(() => applyOps(ops, target)).toThrow(/Index 5 out of bounds/)
   })
+
+  it("throws when setting non-numeric property on array", () => {
+    const target: any = { arr: [] }
+    const ops: Op[] = [{ kind: "set", path: ["arr"], key: "someKey", value: 1 }]
+    expect(() => applyOps(ops, target)).toThrow(/Cannot set non-numeric property "someKey" on array/)
+  })
+
+  it("throws when deleting non-numeric property from array", () => {
+    const target: any = { arr: [] }
+    const ops: Op[] = [{ kind: "delete", path: ["arr"], key: "someKey" }]
+    expect(() => applyOps(ops, target)).toThrow(/Cannot delete non-numeric property "someKey" from array/)
+  })
+
+  it("allows setting length property on array", () => {
+    const target: any = { arr: [1, 2, 3] }
+    const ops: Op[] = [{ kind: "set", path: ["arr"], key: "length", value: 1 }]
+    applyOps(ops, target)
+    expect(target.arr).toEqual([1])
+    expect(target.arr.length).toBe(1)
+  })
+
+  it("allows setting numeric index on array", () => {
+    const target: any = { arr: [1, 2, 3] }
+    const ops: Op[] = [{ kind: "set", path: ["arr"], key: 1, value: 99 }]
+    applyOps(ops, target)
+    expect(target.arr).toEqual([1, 99, 3])
+  })
+
+  it("allows deleting numeric index from array", () => {
+    const target: any = { arr: [1, 2, 3] }
+    const ops: Op[] = [{ kind: "delete", path: ["arr"], key: 1 }]
+    applyOps(ops, target)
+    // Sparse array - index 1 is deleted but length remains 3
+    expect(target.arr.length).toBe(3)
+    expect(1 in target.arr).toBe(false)
+  })
 })
 
 describe("applyOps success features", () => {
@@ -347,5 +408,87 @@ describe("applyOps success features", () => {
     const target: any = { arr: [1, 2, 3] }
     applyOps([{ kind: "splice", path: ["arr"], index: 1, deleteCount: 1, inserts: [] }], target)
     expect(target.arr).toStrictEqual([1, 3])
+  })
+})
+
+describe("set undefined vs delete distinction", () => {
+  it("set with undefined value keeps the key in state", () => {
+    const target: any = { a: 1, b: 2 }
+    applyOps([{ kind: "set", path: [], key: "b", value: undefined }], target)
+    expect("b" in target).toBe(true)
+    expect(target.b).toBe(undefined)
+    expect(Object.keys(target)).toEqual(["a", "b"])
+  })
+
+  it("delete removes the key from state", () => {
+    const target: any = { a: 1, b: 2 }
+    applyOps([{ kind: "delete", path: [], key: "b" }], target)
+    expect("b" in target).toBe(false)
+    expect(target.b).toBe(undefined)
+    expect(Object.keys(target)).toEqual(["a"])
+  })
+
+  it("set undefined and delete produce different results", () => {
+    const target1: any = { a: 1, b: 2 }
+    const target2: any = { a: 1, b: 2 }
+
+    applyOps([{ kind: "set", path: [], key: "b", value: undefined }], target1)
+    applyOps([{ kind: "delete", path: [], key: "b" }], target2)
+
+    // Both targets have b as undefined when accessed
+    expect(target1.b).toBe(undefined)
+    expect(target2.b).toBe(undefined)
+
+    // But they are structurally different
+    expect("b" in target1).toBe(true)
+    expect("b" in target2).toBe(false)
+    expect(Object.keys(target1)).not.toEqual(Object.keys(target2))
+  })
+
+  it("handles set undefined in nested objects", () => {
+    const target: any = { obj: { a: 1, b: 2 } }
+    applyOps([{ kind: "set", path: ["obj"], key: "b", value: undefined }], target)
+    expect("b" in target.obj).toBe(true)
+    expect(target.obj.b).toBe(undefined)
+  })
+
+  it("handles delete in nested objects", () => {
+    const target: any = { obj: { a: 1, b: 2 } }
+    applyOps([{ kind: "delete", path: ["obj"], key: "b" }], target)
+    expect("b" in target.obj).toBe(false)
+  })
+
+  it("handles set undefined in arrays (keeps the index)", () => {
+    const target: any = { arr: [1, 2, 3] }
+    applyOps([{ kind: "set", path: ["arr"], key: 1, value: undefined }], target)
+    expect(target.arr.length).toBe(3)
+    expect(1 in target.arr).toBe(true)
+    expect(target.arr[1]).toBe(undefined)
+    expect(target.arr).toStrictEqual([1, undefined, 3])
+  })
+
+  it("handles delete on array index (creates sparse array)", () => {
+    const target: any = { arr: [1, 2, 3] }
+    applyOps([{ kind: "delete", path: ["arr"], key: 1 }], target)
+    // Delete on array creates a sparse array (hole)
+    expect(target.arr.length).toBe(3)
+    expect(1 in target.arr).toBe(false)
+    expect(target.arr[1]).toBe(undefined)
+  })
+
+  it("set undefined in array vs delete in array are different", () => {
+    const target1: any = { arr: [1, 2, 3] }
+    const target2: any = { arr: [1, 2, 3] }
+
+    applyOps([{ kind: "set", path: ["arr"], key: 1, value: undefined }], target1)
+    applyOps([{ kind: "delete", path: ["arr"], key: 1 }], target2)
+
+    // Both have undefined at index 1
+    expect(target1.arr[1]).toBe(undefined)
+    expect(target2.arr[1]).toBe(undefined)
+
+    // But structurally different (sparse vs explicit undefined)
+    expect(1 in target1.arr).toBe(true)
+    expect(1 in target2.arr).toBe(false)
   })
 })

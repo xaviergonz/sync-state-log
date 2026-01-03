@@ -53,3 +53,15 @@ export function lazy<T>(fn: () => T): () => T {
     return value
   }
 }
+
+/**
+ * Checks if a string is a valid non-negative integer array index.
+ * Returns the numeric value if valid, or null if invalid.
+ */
+export function parseArrayIndex(key: string): number | null {
+  const n = Number(key)
+  if (!Number.isInteger(n) || n < 0) {
+    return null
+  }
+  return n
+}

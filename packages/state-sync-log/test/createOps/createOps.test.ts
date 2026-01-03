@@ -70,7 +70,7 @@ describe("createOps - ops generation", () => {
       draft.list[1] = "B"
     })
 
-    expect(ops).toEqual([{ kind: "set", path: ["list"], key: "1", value: "B" }])
+    expect(ops).toEqual([{ kind: "set", path: ["list"], key: 1, value: "B" }])
   })
 
   test("array push-like at length generates splice op", () => {
@@ -79,7 +79,7 @@ describe("createOps - ops generation", () => {
       draft.list[2] = 3
     })
 
-    expect(ops).toEqual([{ kind: "set", path: ["list"], key: "2", value: 3 }])
+    expect(ops).toEqual([{ kind: "set", path: ["list"], key: 2, value: 3 }])
   })
 
   test("sparse array throws", () => {
@@ -91,13 +91,13 @@ describe("createOps - ops generation", () => {
     }).toThrow(/sparse/i)
   })
 
-  test("setting array length truncates with splice op", () => {
+  test("setting array length truncates with set op", () => {
     const state = { list: [1, 2, 3, 4] }
     const { ops } = createOps(state, (draft) => {
       draft.list.length = 2
     })
 
-    expect(ops).toEqual([{ kind: "splice", path: ["list"], index: 2, deleteCount: 2, inserts: [] }])
+    expect(ops).toEqual([{ kind: "set", path: ["list"], key: "length", value: 2 }])
   })
 
   test("setting array length expands with set op", () => {
@@ -118,6 +118,63 @@ describe("createOps - ops generation", () => {
     expect(ops).toEqual([
       { kind: "splice", path: ["list"], index: 0, deleteCount: 3, inserts: [0, 0, 0] },
     ])
+  })
+
+  describe("splice preserves original intent (no normalization)", () => {
+    test("negative start index is preserved", () => {
+      const state = { list: [1, 2, 3, 4, 5] }
+      const { ops } = createOps(state, (draft) => {
+        draft.list.splice(-2, 1) // Remove second-to-last element
+      })
+      // Original intent: start at -2, deleteCount 1
+      expect(ops).toEqual([
+        { kind: "splice", path: ["list"], index: -2, deleteCount: 1, inserts: [] },
+      ])
+    })
+
+    test("out of range start is preserved", () => {
+      const state = { list: [1, 2, 3] }
+      const { ops } = createOps(state, (draft) => {
+        draft.list.splice(100, 1, 4) // Start beyond array length
+      })
+      // Original intent preserved
+      expect(ops).toEqual([
+        { kind: "splice", path: ["list"], index: 100, deleteCount: 1, inserts: [4] },
+      ])
+    })
+
+    test("negative start beyond array is preserved", () => {
+      const state = { list: [1, 2, 3] }
+      const { ops } = createOps(state, (draft) => {
+        draft.list.splice(-100, 2, 4, 5) // Start way before array
+      })
+      // Original intent preserved
+      expect(ops).toEqual([
+        { kind: "splice", path: ["list"], index: -100, deleteCount: 2, inserts: [4, 5] },
+      ])
+    })
+
+    test("deleteCount exceeding remaining elements is preserved", () => {
+      const state = { list: [1, 2, 3] }
+      const { ops } = createOps(state, (draft) => {
+        draft.list.splice(1, 100) // Delete more than available
+      })
+      // Original intent preserved
+      expect(ops).toEqual([
+        { kind: "splice", path: ["list"], index: 1, deleteCount: 100, inserts: [] },
+      ])
+    })
+
+    test("undefined deleteCount uses array length", () => {
+      const state = { list: [1, 2, 3, 4, 5] }
+      const { ops } = createOps(state, (draft) => {
+        draft.list.splice(2) // No deleteCount means delete to end
+      })
+      // deleteCount defaults to original array length
+      expect(ops).toEqual([
+        { kind: "splice", path: ["list"], index: 2, deleteCount: 5, inserts: [] },
+      ])
+    })
   })
 
   test("no changes returns empty ops", () => {

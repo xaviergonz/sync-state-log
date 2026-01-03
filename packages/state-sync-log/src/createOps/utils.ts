@@ -3,8 +3,9 @@
  * Adapted from mutative - removed Map/Set support, mark, deepFreeze.
  */
 
+import { failure } from "../error"
 import { PROXY_DRAFT } from "./constant"
-import { DraftType, type Op, type ProxyDraft } from "./interface"
+import { DraftType, type ProxyDraft } from "./interface"
 
 // ============================================================================
 // Core Draft Utilities
@@ -131,6 +132,17 @@ export function getPath(
   }
   // target is root draft
   path.reverse()
+  return path
+}
+
+/**
+ * Get the path from root to this draft, or throw if not available
+ */
+export function getPathOrThrow(target: ProxyDraft): (string | number)[] {
+  const path = getPath(target)
+  if (!path) {
+    throw failure("Cannot determine path for operation")
+  }
   return path
 }
 
@@ -274,77 +286,4 @@ export function handleValue(target: unknown, handledSet: WeakSet<object>): void 
       handleValue(value, handledSet)
     }
   })
-}
-
-/**
- * Finalize assigned values (handle draftable values that were assigned)
- */
-export function finalizeAssigned(proxyDraft: ProxyDraft, key: PropertyKey): void {
-  if (
-    proxyDraft.finalities.revoke.length > 1 &&
-    proxyDraft.assignedMap?.get(key) &&
-    proxyDraft.copy
-  ) {
-    handleValue(get(proxyDraft.copy as object, key), proxyDraft.finalities.handledSet)
-  }
-}
-
-/**
- * Type for generateOps function
- */
-export type GenerateOps = (proxyState: ProxyDraft, basePath: (string | number)[], ops: Op[]) => void
-
-/**
- * Finalize ops for a draft
- */
-export function finalizeOps(target: ProxyDraft, generateOps: GenerateOps, ops?: Op[]): void {
-  const shouldFinalize =
-    target.operated && target.assignedMap && target.assignedMap.size > 0 && !target.finalized
-
-  if (shouldFinalize && ops) {
-    const basePath = getPath(target)
-    if (basePath) {
-      generateOps(target, basePath, ops)
-    }
-    target.finalized = true
-  }
-}
-
-/**
- * Mark a value for finalization (set up callbacks for assigned drafts)
- */
-export function markFinalization(
-  target: ProxyDraft,
-  key: PropertyKey,
-  value: unknown,
-  generateOps: GenerateOps
-): void {
-  const proxyDraft = getProxyDraft(value)
-  if (proxyDraft) {
-    // Assign the draft value
-    if (!proxyDraft.callbacks) {
-      proxyDraft.callbacks = []
-    }
-    proxyDraft.callbacks.push((ops) => {
-      const copy = target.copy
-      if (copy && isEqual(get(copy as object, key), value)) {
-        let updatedValue = proxyDraft.original
-        if (proxyDraft.copy) {
-          updatedValue = proxyDraft.copy
-        }
-        finalizeOps(target, generateOps, ops)
-        set(copy as object, key, updatedValue)
-      }
-    })
-  }
-
-  if (isDraftable(value)) {
-    // Assign the non-draft draftable value
-    target.finalities.draft.push(() => {
-      const copy = target.copy
-      if (copy && isEqual(get(copy as object, key), value)) {
-        finalizeAssigned(target, key)
-      }
-    })
-  }
 }

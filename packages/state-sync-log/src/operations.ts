@@ -1,14 +1,14 @@
 import { failure } from "./error"
 import { JSONObject, JSONValue, Path } from "./json"
-import { deepClone, deepEqual, isObject } from "./utils"
+import { deepClone, deepEqual, isObject, parseArrayIndex } from "./utils"
 
 /**
  * Supported operations.
  * Applied sequentially within a tx.
  */
 export type Op =
-  | { kind: "set"; path: Path; key: string; value: JSONValue }
-  | { kind: "delete"; path: Path; key: string }
+  | { kind: "set"; path: Path; key: string | number; value: JSONValue }
+  | { kind: "delete"; path: Path; key: string | number }
   | { kind: "splice"; path: Path; index: number; deleteCount: number; inserts: JSONValue[] }
   | { kind: "addToSet"; path: Path; value: JSONValue }
   | { kind: "deleteFromSet"; path: Path; value: JSONValue }
@@ -72,23 +72,43 @@ function applyOp(state: JSONObject, op: Op, cloneValues: boolean): void {
   const container = resolvePath(state, op.path)
 
   switch (op.kind) {
-    case "set":
+    case "set": {
       // Allow object or array container
       if (!isObject(container)) {
         failure("set requires object or array container")
       }
+      let key: string | number = op.key
+      // For arrays, convert string keys to numbers (except "length")
+      if (Array.isArray(container) && typeof key === "string" && key !== "length") {
+        const numKey = parseArrayIndex(key)
+        if (numKey === null) {
+          failure(`Cannot set non-numeric property "${key}" on array`)
+        }
+        key = numKey
+      }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(container as any)[op.key] = cloneValues ? deepClone(op.value) : op.value
+      ;(container as any)[key] = cloneValues ? deepClone(op.value) : op.value
       break
+    }
 
-    case "delete":
+    case "delete": {
       // Allow object or array (sparse delete?)
       if (!isObject(container)) {
         failure("delete requires object or array container")
       }
+      let key: string | number = op.key
+      // For arrays, convert string keys to numbers
+      if (Array.isArray(container) && typeof key === "string") {
+        const numKey = parseArrayIndex(key)
+        if (numKey === null) {
+          failure(`Cannot delete non-numeric property "${key}" from array`)
+        }
+        key = numKey
+      }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      delete (container as any)[op.key]
+      delete (container as any)[key]
       break
+    }
 
     case "splice": {
       if (!Array.isArray(container)) {

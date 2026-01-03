@@ -27,24 +27,29 @@ describe("Validation", () => {
     expect(log.getState()).toStrictEqual({})
   })
 
-  it("rejects set operation on array container", () => {
+  it("allows set operation on array container (by index or property)", () => {
     const doc = new Y.Doc()
     const log = createStateSyncLog<any>({ yDoc: doc, retentionWindowMs: undefined })
 
     log.emit([{ kind: "set", path: [], key: "arr", value: [1, 2, 3] }])
-    log.emit([{ kind: "set", path: ["arr"], key: "foo", value: "bar" }])
+    log.emit([{ kind: "set", path: ["arr"], key: 1, value: 99 }])
 
-    expect(log.getState().arr).toStrictEqual([1, 2, 3])
+    expect(log.getState().arr).toStrictEqual([1, 99, 3])
   })
 
-  it("rejects delete operation on array container", () => {
+  it("allows delete operation on array container (creates sparse hole)", () => {
     const doc = new Y.Doc()
     const log = createStateSyncLog<any>({ yDoc: doc, retentionWindowMs: undefined })
 
     log.emit([{ kind: "set", path: [], key: "arr", value: [1, 2, 3] }])
-    log.emit([{ kind: "delete", path: ["arr"], key: "0" }])
+    log.emit([{ kind: "delete", path: ["arr"], key: 0 }])
 
-    expect(log.getState().arr).toStrictEqual([1, 2, 3])
+    // Delete creates a sparse array with hole at index 0
+    const arr = log.getState().arr
+    expect(arr.length).toBe(3)
+    expect(0 in arr).toBe(false) // Hole at index 0
+    expect(arr[1]).toBe(2)
+    expect(arr[2]).toBe(3)
   })
 
   it("rejects splice operation on object container", () => {

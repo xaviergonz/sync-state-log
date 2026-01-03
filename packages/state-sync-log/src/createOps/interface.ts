@@ -17,15 +17,15 @@ export enum DraftType {
  * Finalities - shared state for the draft tree
  */
 export interface Finalities {
-  /** Finalization callbacks */
-  draft: ((ops: Op[]) => void)[]
+  /** Finalization callbacks (for unwrapping child drafts) */
+  draft: (() => void)[]
   /** Revoke functions for all proxies */
   revoke: (() => void)[]
   /** Set of handled objects (for cycle detection) */
   handledSet: WeakSet<object>
   /** Cache of created drafts */
   draftsCache: WeakSet<object>
-  /** List of operations performed in this draft session */
+  /** List of operations performed in this draft session (eager logging) */
   ops: Op[]
 }
 
@@ -53,8 +53,6 @@ export interface ProxyDraft<T = any> {
   key?: string | number
   /** Track which keys have been assigned (key -> true=assigned, false=deleted) */
   assignedMap?: Map<PropertyKey, boolean>
-  /** Callbacks for assigned draft values */
-  callbacks?: ((ops: Op[]) => void)[]
 }
 
 /**

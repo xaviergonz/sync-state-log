@@ -69,6 +69,33 @@ describe("draft", () => {
         ops: [{ kind: "splice", path: ["arr"], index: 1, deleteCount: 1, inserts: [] }],
         expected: { arr: [1, 3] },
       },
+      // Array set/delete (by index)
+      {
+        desc: "sets array element by index",
+        base: { arr: [1, 2, 3] },
+        ops: [{ kind: "set", path: ["arr"], key: 1, value: 99 }],
+        expected: { arr: [1, 99, 3] },
+      },
+      {
+        desc: "sets array length to truncate",
+        base: { arr: [1, 2, 3, 4, 5] },
+        ops: [{ kind: "set", path: ["arr"], key: "length", value: 2 }],
+        expected: { arr: [1, 2] },
+      },
+      {
+        desc: "sets array length to expand",
+        base: { arr: [1, 2] },
+        ops: [{ kind: "set", path: ["arr"], key: "length", value: 4 }],
+        // Setting length creates sparse array - check length separately
+        expected: { arr: expect.objectContaining({ length: 4, 0: 1, 1: 2 }) },
+      },
+      {
+        desc: "deletes array element by index (creates sparse hole)",
+        base: { arr: [1, 2, 3] },
+        ops: [{ kind: "delete", path: ["arr"], key: 1 }],
+        // Delete creates sparse array with hole at index 1
+        expected: { arr: expect.objectContaining({ length: 3, 0: 1, 2: 3 }) },
+      },
       // Set operations (addToSet, deleteFromSet)
       {
         desc: "adds to set",
@@ -190,6 +217,138 @@ describe("draft", () => {
       const base = { a: 1 }
       const result = applyTxImmutable(base, { ops: [] })
       expect(result).toBe(base)
+    })
+  })
+
+  describe("set undefined vs delete distinction", () => {
+    it("set with undefined keeps the key in state", () => {
+      const base = { a: 1, b: 2 }
+      const result = applyTxImmutable(base, {
+        ops: [{ kind: "set", path: [], key: "b", value: undefined }],
+      }) as any
+
+      expect("b" in result).toBe(true)
+      expect(result.b).toBe(undefined)
+      expect(Object.keys(result)).toEqual(["a", "b"])
+    })
+
+    it("delete removes the key from state", () => {
+      const base = { a: 1, b: 2 }
+      const result = applyTxImmutable(base, {
+        ops: [{ kind: "delete", path: [], key: "b" }],
+      }) as any
+
+      expect("b" in result).toBe(false)
+      expect(result.b).toBe(undefined)
+      expect(Object.keys(result)).toEqual(["a"])
+    })
+
+    it("set undefined and delete produce structurally different results", () => {
+      const base = { a: 1, b: 2 }
+
+      const result1 = applyTxImmutable(base, {
+        ops: [{ kind: "set", path: [], key: "b", value: undefined }],
+      }) as any
+      const result2 = applyTxImmutable(base, {
+        ops: [{ kind: "delete", path: [], key: "b" }],
+      }) as any
+
+      expect(result1.b).toBe(undefined)
+      expect(result2.b).toBe(undefined)
+
+      // But structurally different
+      expect("b" in result1).toBe(true)
+      expect("b" in result2).toBe(false)
+    })
+
+    it("set undefined in nested object", () => {
+      const base = { obj: { a: 1, b: 2 } }
+      const result = applyTxImmutable(base, {
+        ops: [{ kind: "set", path: ["obj"], key: "b", value: undefined }],
+      }) as any
+
+      expect("b" in result.obj).toBe(true)
+      expect(result.obj.b).toBe(undefined)
+    })
+
+    it("delete in nested object", () => {
+      const base = { obj: { a: 1, b: 2 } }
+      const result = applyTxImmutable(base, {
+        ops: [{ kind: "delete", path: ["obj"], key: "b" }],
+      }) as any
+
+      expect("b" in result.obj).toBe(false)
+    })
+
+    it("set undefined in array keeps index with value undefined", () => {
+      const base = { arr: [1, 2, 3] }
+      const result = applyTxImmutable(base, {
+        ops: [{ kind: "set", path: ["arr"], key: 1, value: undefined }],
+      }) as any
+
+      expect(result.arr.length).toBe(3)
+      expect(1 in result.arr).toBe(true)
+      expect(result.arr[1]).toBe(undefined)
+    })
+
+    it("delete on array index creates sparse array", () => {
+      const base = { arr: [1, 2, 3] }
+      const result = applyTxImmutable(base, {
+        ops: [{ kind: "delete", path: ["arr"], key: 1 }],
+      }) as any
+
+      expect(result.arr.length).toBe(3)
+      expect(1 in result.arr).toBe(false)
+      expect(result.arr[1]).toBe(undefined)
+    })
+  })
+
+  describe("non-numeric array property validation", () => {
+    it("returns base when setting non-numeric property on array", () => {
+      const base = { arr: [1, 2, 3] }
+      const result = applyTxImmutable(base, {
+        ops: [{ kind: "set", path: ["arr"], key: "someKey", value: 42 }],
+      })
+      // Invalid op is rejected, base is returned unchanged
+      expect(result).toBe(base)
+    })
+
+    it("returns base when deleting non-numeric property from array", () => {
+      const base = { arr: [1, 2, 3] }
+      const result = applyTxImmutable(base, {
+        ops: [{ kind: "delete", path: ["arr"], key: "someKey" }],
+      })
+      // Invalid op is rejected, base is returned unchanged
+      expect(result).toBe(base)
+    })
+
+    it("allows setting length property on array", () => {
+      const base = { arr: [1, 2, 3] }
+      const result = applyTxImmutable(base, {
+        ops: [{ kind: "set", path: ["arr"], key: "length", value: 1 }],
+      }) as any
+
+      expect(result.arr).toEqual([1])
+      expect(result.arr.length).toBe(1)
+    })
+
+    it("allows setting numeric index on array", () => {
+      const base = { arr: [1, 2, 3] }
+      const result = applyTxImmutable(base, {
+        ops: [{ kind: "set", path: ["arr"], key: 1, value: 99 }],
+      }) as any
+
+      expect(result.arr).toEqual([1, 99, 3])
+    })
+
+    it("allows deleting numeric index from array", () => {
+      const base = { arr: [1, 2, 3] }
+      const result = applyTxImmutable(base, {
+        ops: [{ kind: "delete", path: ["arr"], key: 1 }],
+      }) as any
+
+      expect(result.arr.length).toBe(3)
+      expect(1 in result.arr).toBe(false)
     })
   })
 })

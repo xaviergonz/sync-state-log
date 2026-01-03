@@ -205,4 +205,174 @@ describe("Sync", () => {
       expect((logA.getState().arr as number[]).length).toBe(1)
     })
   })
+
+  describe("set undefined vs delete sync", () => {
+    it("syncs set undefined correctly between clients", () => {
+      const doc = new Y.Doc()
+      const log1 = createStateSyncLog<any>({
+        yDoc: doc,
+        clientId: "A",
+        retentionWindowMs: undefined,
+      })
+      const log2 = createStateSyncLog<any>({
+        yDoc: doc,
+        clientId: "B",
+        retentionWindowMs: undefined,
+      })
+
+      // Initial state
+      log1.emit([{ kind: "set", path: [], key: "a", value: 1 }])
+      log1.emit([{ kind: "set", path: [], key: "b", value: 2 }])
+
+      // Set b to undefined
+      log1.emit([{ kind: "set", path: [], key: "b", value: undefined }])
+
+      // Both clients should have b with undefined value
+      const state1 = log1.getState()
+      const state2 = log2.getState()
+
+      expect("b" in state1).toBe(true)
+      expect("b" in state2).toBe(true)
+      expect(state1.b).toBe(undefined)
+      expect(state2.b).toBe(undefined)
+      expect(state1).toStrictEqual(state2)
+    })
+
+    it("syncs delete correctly between clients", () => {
+      const doc = new Y.Doc()
+      const log1 = createStateSyncLog<any>({
+        yDoc: doc,
+        clientId: "A",
+        retentionWindowMs: undefined,
+      })
+      const log2 = createStateSyncLog<any>({
+        yDoc: doc,
+        clientId: "B",
+        retentionWindowMs: undefined,
+      })
+
+      // Initial state
+      log1.emit([{ kind: "set", path: [], key: "a", value: 1 }])
+      log1.emit([{ kind: "set", path: [], key: "b", value: 2 }])
+
+      // Delete b
+      log1.emit([{ kind: "delete", path: [], key: "b" }])
+
+      // Both clients should NOT have b key
+      const state1 = log1.getState()
+      const state2 = log2.getState()
+
+      expect("b" in state1).toBe(false)
+      expect("b" in state2).toBe(false)
+      expect(Object.keys(state1)).toEqual(["a"])
+      expect(Object.keys(state2)).toEqual(["a"])
+      expect(state1).toStrictEqual(state2)
+    })
+
+    it("preserves set undefined vs delete distinction after sync", () => {
+      const doc = new Y.Doc()
+      const log1 = createStateSyncLog<any>({
+        yDoc: doc,
+        clientId: "A",
+        retentionWindowMs: undefined,
+      })
+      const log2 = createStateSyncLog<any>({
+        yDoc: doc,
+        clientId: "B",
+        retentionWindowMs: undefined,
+      })
+
+      // Setup
+      log1.emit([{ kind: "set", path: [], key: "keep", value: 1 }])
+      log1.emit([{ kind: "set", path: [], key: "setUndefined", value: "initial" }])
+      log1.emit([{ kind: "set", path: [], key: "toDelete", value: "initial" }])
+
+      // Set one key to undefined, delete another
+      log1.emit([{ kind: "set", path: [], key: "setUndefined", value: undefined }])
+      log1.emit([{ kind: "delete", path: [], key: "toDelete" }])
+
+      const state1 = log1.getState()
+      const state2 = log2.getState()
+
+      // Verify distinction is preserved
+      expect("setUndefined" in state1).toBe(true)
+      expect("setUndefined" in state2).toBe(true)
+      expect("toDelete" in state1).toBe(false)
+      expect("toDelete" in state2).toBe(false)
+
+      expect(state1).toStrictEqual(state2)
+      expect(Object.keys(state1).sort()).toEqual(["keep", "setUndefined"])
+    })
+
+    it("preserves distinction after checkpoint", () => {
+      const doc = new Y.Doc()
+      const log1 = createStateSyncLog<any>({
+        yDoc: doc,
+        clientId: "A",
+        retentionWindowMs: 5000,
+      })
+      const log2 = createStateSyncLog<any>({
+        yDoc: doc,
+        clientId: "B",
+        retentionWindowMs: 5000,
+      })
+
+      // Setup
+      log1.emit([{ kind: "set", path: [], key: "keep", value: 1 }])
+      log1.emit([{ kind: "set", path: [], key: "setUndefined", value: undefined }])
+      log1.emit([{ kind: "set", path: [], key: "toDelete", value: 2 }])
+      log1.emit([{ kind: "delete", path: [], key: "toDelete" }])
+
+      // Compact to create checkpoint
+      log1.compact()
+
+      // Verify distinction is preserved after checkpoint
+      const state1 = log1.getState()
+      const state2 = log2.getState()
+
+      expect("setUndefined" in state1).toBe(true)
+      expect("setUndefined" in state2).toBe(true)
+      expect("toDelete" in state1).toBe(false)
+      expect("toDelete" in state2).toBe(false)
+
+      expect(state1).toStrictEqual(state2)
+    })
+
+    it("new client joining after checkpoint sees correct state", () => {
+      const doc1 = new Y.Doc()
+      const log1 = createStateSyncLog<any>({
+        yDoc: doc1,
+        clientId: "A",
+        retentionWindowMs: 5000,
+      })
+
+      // Create state with set undefined and delete
+      log1.emit([{ kind: "set", path: [], key: "a", value: 1 }])
+      log1.emit([{ kind: "set", path: [], key: "b", value: undefined }])
+      log1.emit([{ kind: "set", path: [], key: "c", value: 2 }])
+      log1.emit([{ kind: "delete", path: [], key: "c" }])
+
+      // Compact
+      log1.compact()
+
+      // New client joins
+      const doc2 = new Y.Doc()
+      Y.applyUpdate(doc2, Y.encodeStateAsUpdate(doc1))
+
+      const log2 = createStateSyncLog<any>({
+        yDoc: doc2,
+        clientId: "B",
+        retentionWindowMs: 5000,
+      })
+
+      const state2 = log2.getState()
+      expect("a" in state2).toBe(true)
+      expect("b" in state2).toBe(true)
+      expect("c" in state2).toBe(false)
+      expect(state2.a).toBe(1)
+      expect(state2.b).toBe(undefined)
+
+      expect(state2).toStrictEqual(log1.getState())
+    })
+  })
 })

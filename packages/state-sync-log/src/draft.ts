@@ -2,7 +2,7 @@ import { failure } from "./error"
 import type { JSONObject, JSONRecord, JSONValue, Path } from "./json"
 import type { Op, ValidateFn } from "./operations"
 import { TxRecord } from "./TxRecord"
-import { deepEqual, isObject } from "./utils"
+import { deepEqual, isObject, parseArrayIndex } from "./utils"
 
 /**
  * A draft context for copy-on-write immutable updates.
@@ -139,14 +139,23 @@ function ensureOwnedPath<T extends JSONObject>(
 export function draftSet<T extends JSONObject>(
   ctx: DraftContext<T>,
   path: Path,
-  key: string,
+  key: string | number,
   value: JSONValue
 ): void {
   const container = ensureOwnedPath(ctx, path)
-  if (Array.isArray(container)) {
-    failure("set requires object container")
+  if (!isObject(container)) {
+    failure("set requires object or array container")
   }
-  ;(container as JSONRecord)[key] = value
+  let finalKey: string | number = key
+  // For arrays, convert string keys to numbers (except "length")
+  if (Array.isArray(container) && typeof key === "string" && key !== "length") {
+    const numKey = parseArrayIndex(key)
+    if (numKey === null) {
+      failure(`Cannot set non-numeric property "${key}" on array`)
+    }
+    finalKey = numKey
+  }
+  ;(container as Record<string | number, JSONValue>)[finalKey] = value
 }
 
 /**
@@ -155,13 +164,22 @@ export function draftSet<T extends JSONObject>(
 export function draftDelete<T extends JSONObject>(
   ctx: DraftContext<T>,
   path: Path,
-  key: string
+  key: string | number
 ): void {
   const container = ensureOwnedPath(ctx, path)
-  if (Array.isArray(container)) {
-    failure("delete requires object container")
+  if (!isObject(container)) {
+    failure("delete requires object or array container")
   }
-  delete (container as JSONRecord)[key]
+  let finalKey: string | number = key
+  // For arrays, convert string keys to numbers
+  if (Array.isArray(container) && typeof key === "string") {
+    const numKey = parseArrayIndex(key)
+    if (numKey === null) {
+      failure(`Cannot delete non-numeric property "${key}" from array`)
+    }
+    finalKey = numKey
+  }
+  delete (container as Record<string | number, JSONValue>)[finalKey]
 }
 
 /**
