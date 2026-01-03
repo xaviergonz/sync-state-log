@@ -186,5 +186,31 @@ describe("Reconcile", () => {
       expect("b" in state).toBe(true)
       expect(state.b).toBe(undefined)
     })
+
+    it("emit set operation with array containing undefined", () => {
+      const doc = new Y.Doc()
+      const log = createStateSyncLog<any>({ yDoc: doc, retentionWindowMs: undefined })
+
+      log.reconcileState({ arr: [1, 2, 3] })
+      log.emit([{ kind: "set", path: [], key: "arr", value: [1, undefined, 3] }])
+
+      const state = log.getState()
+      expect(state.arr).toHaveLength(3)
+      expect(state.arr[0]).toBe(1)
+      expect(state.arr[1]).toBe(undefined)
+      expect(state.arr[2]).toBe(3)
+      expect(1 in state.arr).toBe(true) // index 1 exists (not a sparse hole)
+    })
+
+    it("reconcile with array containing undefined", () => {
+      const doc = new Y.Doc()
+      const log = createStateSyncLog<any>({ yDoc: doc, retentionWindowMs: undefined })
+
+      log.reconcileState({ data: { arr: [1, undefined, 3] } })
+
+      const state = log.getState()
+      expect(state.data.arr[1]).toBe(undefined)
+      expect(1 in state.data.arr).toBe(true)
+    })
   })
 })
