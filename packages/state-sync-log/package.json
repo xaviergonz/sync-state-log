@@ -1,6 +1,6 @@
 {
   "name": "state-sync-log",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Validated Replicated State Machine built on Yjs. Combine CRDT offline capabilities with strict business logic validation, state reconciliation, and audit trails.",
   "keywords": [
     "state-sync",
