@@ -13,6 +13,7 @@ import {
   isDraftable,
   original,
 } from "../../src/createOps"
+import { getProxyDraft } from "../../src/createOps/utils"
 import { applyOps } from "../../src/operations"
 
 describe("createOps - ops generation", () => {
@@ -334,5 +335,260 @@ describe("deleteFromSet()", () => {
     })
 
     expect(ops).toEqual([{ kind: "deleteFromSet", path: ["tags"], value: "b" }])
+  })
+})
+
+describe("createOps - deep cloning of values", () => {
+  test("assigning nested object and then mutating it captures value at assignment time in ops", () => {
+    const state = { data: null as { nested: { value: number } } | null }
+    const { ops } = createOps(state, (draft) => {
+      // Assign a nested object
+      const obj = { nested: { value: 1 } }
+      draft.data = obj
+
+      // Mutate the object after assignment
+      obj.nested.value = 999
+    })
+
+    // The op should have captured the value at assignment time (value: 1), not after mutation
+    expect(ops).toEqual([{ kind: "set", path: [], key: "data", value: { nested: { value: 1 } } }])
+  })
+
+  test("assigning array and then mutating it captures value at assignment time in ops", () => {
+    const state = { items: [] as number[][] }
+    const { ops } = createOps(state, (draft) => {
+      const arr = [1, 2, 3]
+      draft.items.push(arr)
+
+      // Mutate the array after push
+      arr.push(999)
+    })
+
+    // The splice op should have captured [1, 2, 3], not [1, 2, 3, 999]
+    expect(ops).toEqual([
+      { kind: "splice", path: ["items"], index: 0, deleteCount: 0, inserts: [[1, 2, 3]] },
+    ])
+  })
+
+  test("mutating deeply nested assigned object does not affect op value", () => {
+    const state = { root: {} as Record<string, unknown> }
+    const { ops } = createOps(state, (draft) => {
+      const deep = { level1: { level2: { level3: { data: "original" } } } }
+      draft.root.deep = deep
+
+      // Mutate at multiple levels
+      deep.level1.level2.level3.data = "mutated"
+    })
+
+    expect(ops).toEqual([
+      {
+        kind: "set",
+        path: ["root"],
+        key: "deep",
+        value: { level1: { level2: { level3: { data: "original" } } } },
+      },
+    ])
+  })
+
+  test("ops are independent - applying them produces correct state", () => {
+    const state = { data: null as { x: number; y: number } | null }
+    const { ops } = createOps(state, (draft) => {
+      const point = { x: 10, y: 20 }
+      draft.data = point
+      point.x = 9999 // Mutate after assignment
+    })
+
+    // Apply ops to a fresh state
+    const target = { data: null as { x: number; y: number } | null }
+    applyOps(ops, target)
+
+    // Should have the original values, not mutated ones
+    expect(target.data).toEqual({ x: 10, y: 20 })
+  })
+
+  test("multiple assignments capture each value independently", () => {
+    const state = { a: null as object | null, b: null as object | null }
+    const { ops } = createOps(state, (draft) => {
+      const shared = { value: 1 }
+      draft.a = shared
+      shared.value = 2
+      draft.b = shared
+      shared.value = 3
+    })
+
+    // Each assignment should capture the value at that moment
+    expect(ops).toEqual([
+      { kind: "set", path: [], key: "a", value: { value: 1 } },
+      { kind: "set", path: [], key: "b", value: { value: 2 } },
+    ])
+  })
+
+  test("splice with existing element reference, mutation, and pop produces consistent state", () => {
+    const initial = [{ a: 1 }, { a: 2 }, { a: 3 }]
+    const { ops, nextState } = createOps(initial, (draft) => {
+      draft.splice(0, 1, draft[2]) // insert an existing element by reference/alias
+      // After splice: draft = [{a:3}, {a:2}, {a:3}] with [0] and [2] being the same object
+      draft[2].a = 4 // mutates both [0] and [2] because they're the same object
+      draft.pop()
+    })
+
+    // Apply ops to a fresh copy of the initial state
+    const target = [{ a: 1 }, { a: 2 }, { a: 3 }]
+    applyOps(ops, target)
+
+    // Both should produce the same result
+    // Aliasing is preserved: mutation affects all positions, ops are emitted for all paths
+    expect(target).toEqual(nextState)
+    expect(nextState).toEqual([{ a: 4 }, { a: 2 }])
+  })
+
+  test("push existing element and mutate emits ops for all paths", () => {
+    const initial = [{ a: 1 }]
+    const { ops, nextState } = createOps(initial, (draft) => {
+      draft.push(draft[0]) // d[0] and d[1] are now the same object
+      draft[0].a++ // emits ops for both [0].a and [1].a
+    })
+
+    // Apply ops to a fresh copy
+    const target = [{ a: 1 }]
+    applyOps(ops, target)
+
+    // Both positions should have a: 2
+    expect(target).toEqual(nextState)
+    expect(nextState).toEqual([{ a: 2 }, { a: 2 }])
+  })
+
+  test("nested aliasing with push and mutation", () => {
+    const initial = { items: [[]] as number[][] }
+    const { ops, nextState } = createOps(initial, (draft) => {
+      draft.items.push(draft.items[0]) // items[0] and items[1] are same array
+      draft.items[1].push(1) // emits splice for both items[0] and items[1]
+    })
+
+    // Apply ops
+    const target = { items: [[]] as number[][] }
+    applyOps(ops, target)
+
+    // Both arrays should have [1]
+    expect(target).toEqual(nextState)
+    expect(nextState).toEqual({ items: [[1], [1]] })
+  })
+})
+
+describe("aliasCount tracking", () => {
+  test("newly created draft starts with aliasCount = 1", () => {
+    const state = { nested: { value: 1 } }
+    createOps(state, (draft) => {
+      const nestedDraft = getProxyDraft(draft.nested)
+      expect(nestedDraft).not.toBeNull()
+      expect(nestedDraft!.aliasCount).toBe(1)
+    })
+  })
+
+  test("pushing a draft increments its aliasCount", () => {
+    const state = { arr: [] as object[], obj: { value: 1 } }
+    createOps(state, (draft) => {
+      const objDraft = getProxyDraft(draft.obj)
+      expect(objDraft!.aliasCount).toBe(1)
+
+      draft.arr.push(draft.obj)
+      expect(objDraft!.aliasCount).toBe(2)
+    })
+  })
+
+  test("assigning a draft to new property increments aliasCount", () => {
+    const state = { a: { value: 1 }, b: null as object | null }
+    createOps(state, (draft) => {
+      const aDraft = getProxyDraft(draft.a)
+      expect(aDraft!.aliasCount).toBe(1)
+
+      draft.b = draft.a
+      expect(aDraft!.aliasCount).toBe(2)
+    })
+  })
+
+  test("pop decrements aliasCount of removed element", () => {
+    const state = { arr: [{ value: 1 }] }
+    createOps(state, (draft) => {
+      const elemDraft = getProxyDraft(draft.arr[0])
+      expect(elemDraft!.aliasCount).toBe(1)
+
+      draft.arr.pop()
+      expect(elemDraft!.aliasCount).toBe(0)
+    })
+  })
+
+  test("shift decrements aliasCount of removed element", () => {
+    const state = { arr: [{ value: 1 }, { value: 2 }] }
+    createOps(state, (draft) => {
+      const firstDraft = getProxyDraft(draft.arr[0])
+      expect(firstDraft!.aliasCount).toBe(1)
+
+      draft.arr.shift()
+      expect(firstDraft!.aliasCount).toBe(0)
+    })
+  })
+
+  test("splice removes and adds track aliasCount correctly", () => {
+    const state = { arr: [{ a: 1 }, { a: 2 }, { a: 3 }], extra: { a: 4 } }
+    createOps(state, (draft) => {
+      const elem0 = getProxyDraft(draft.arr[0])
+      const elem1 = getProxyDraft(draft.arr[1])
+      const extra = getProxyDraft(draft.extra)
+
+      expect(elem0!.aliasCount).toBe(1)
+      expect(elem1!.aliasCount).toBe(1)
+      expect(extra!.aliasCount).toBe(1)
+
+      // Remove elem0 and elem1, insert extra
+      draft.arr.splice(0, 2, draft.extra)
+
+      expect(elem0!.aliasCount).toBe(0) // removed
+      expect(elem1!.aliasCount).toBe(0) // removed
+      expect(extra!.aliasCount).toBe(2) // now at extra AND arr[0]
+    })
+  })
+
+  test("delete decrements aliasCount", () => {
+    const state = { a: { value: 1 } } as { a?: { value: number } }
+    createOps(state, (draft) => {
+      const aDraft = getProxyDraft(draft.a)
+      expect(aDraft!.aliasCount).toBe(1)
+
+      delete draft.a
+      expect(aDraft!.aliasCount).toBe(0)
+    })
+  })
+
+  test("replacing a property decrements old and increments new aliasCount", () => {
+    const state = { prop: { old: true }, other: { new: true } }
+    createOps(state, (draft) => {
+      const oldDraft = getProxyDraft(draft.prop)
+      const newDraft = getProxyDraft(draft.other)
+
+      expect(oldDraft!.aliasCount).toBe(1)
+      expect(newDraft!.aliasCount).toBe(1)
+
+      ;(draft as Record<string, unknown>).prop = draft.other
+
+      expect(oldDraft!.aliasCount).toBe(0)
+      expect(newDraft!.aliasCount).toBe(2)
+    })
+  })
+
+  test("multiple aliasing tracks correctly", () => {
+    const state = { arr: [] as object[], obj: { x: 1 } }
+    createOps(state, (draft) => {
+      const objDraft = getProxyDraft(draft.obj)
+
+      draft.arr.push(draft.obj) // aliasCount = 2
+      draft.arr.push(draft.obj) // aliasCount = 3
+      draft.arr.push(draft.obj) // aliasCount = 4
+
+      expect(objDraft!.aliasCount).toBe(4)
+
+      draft.arr.pop() // aliasCount = 3
+      expect(objDraft!.aliasCount).toBe(3)
+    })
   })
 })

@@ -147,6 +147,42 @@ export function getPathOrThrow(target: ProxyDraft): (string | number)[] {
 }
 
 /**
+ * Find all paths to a given draft by searching the tree.
+ * This handles aliasing where the same draft exists at multiple positions.
+ */
+export function getAllPathsForDraft(
+  rootDraft: ProxyDraft,
+  targetDraft: ProxyDraft
+): (string | number)[][] {
+  const result: (string | number)[][] = []
+
+  function search(current: ProxyDraft, currentPath: (string | number)[]): void {
+    if (current === targetDraft) {
+      result.push([...currentPath])
+      // Don't return - the same draft could be nested inside itself (unlikely but possible)
+    }
+
+    const source = latest(current) as Record<string | number, unknown>
+    if (!source || typeof source !== "object") return
+
+    const keys: (string | number)[] = Array.isArray(source)
+      ? Array.from({ length: source.length }, (_, i) => i)
+      : Object.keys(source)
+
+    for (const key of keys) {
+      const value = source[key]
+      const childDraft = getProxyDraft(value)
+      if (childDraft) {
+        search(childDraft, [...currentPath, key])
+      }
+    }
+  }
+
+  search(rootDraft, [])
+  return result
+}
+
+/**
  * Get a property descriptor from the prototype chain
  */
 export function getDescriptor(target: object, key: PropertyKey): PropertyDescriptor | undefined {

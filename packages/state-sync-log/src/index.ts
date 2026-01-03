@@ -1,4 +1,5 @@
 export type { CheckpointKey, CheckpointRecord } from "./checkpoints"
+export * from "./createOps"
 export {
   createStateSyncLog,
   type StateSyncLogController,

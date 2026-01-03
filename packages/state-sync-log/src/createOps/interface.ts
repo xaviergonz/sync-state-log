@@ -27,6 +27,8 @@ export interface Finalities {
   draftsCache: WeakSet<object>
   /** List of operations performed in this draft session (eager logging) */
   ops: Op[]
+  /** Root draft of the tree (set when creating the root draft) */
+  rootDraft: ProxyDraft | null
 }
 
 /**
@@ -53,6 +55,8 @@ export interface ProxyDraft<T = any> {
   key?: string | number
   /** Track which keys have been assigned (key -> true=assigned, false=deleted) */
   assignedMap?: Map<PropertyKey, boolean>
+  /** Count of positions this draft exists at (for aliasing optimization) */
+  aliasCount: number
 }
 
 /**

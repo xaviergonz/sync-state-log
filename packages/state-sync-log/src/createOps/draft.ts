@@ -32,6 +32,34 @@ import {
 // Note: getValue is used in finalizeDraft, deepClone uses it internally for drafts
 
 /**
+ * Increment aliasCount for a draft (if the value is a draft).
+ */
+function incAliasCount(value: unknown): void {
+  const draft = getProxyDraft(value)
+  if (draft) draft.aliasCount++
+}
+
+/**
+ * Decrement aliasCount for a draft (if the value is a draft).
+ */
+function decAliasCount(value: unknown): void {
+  const draft = getProxyDraft(value)
+  if (draft) draft.aliasCount--
+}
+
+/**
+ * Normalize an array index like native array methods do.
+ * Handles negative indices and clamps to [0, len].
+ * @param index - The index to normalize (can be negative or undefined)
+ * @param len - The array length
+ * @param defaultValue - Value to use if index is undefined (typically 0 or len)
+ */
+function normalizeIndex(index: number | undefined, len: number, defaultValue: number): number {
+  if (index === undefined) return defaultValue
+  return index < 0 ? Math.max(len + index, 0) : Math.min(index, len)
+}
+
+/**
  * Array methods that mutate the array and need to be intercepted for eager op logging.
  */
 const MUTATING_ARRAY_METHODS = new Set([
@@ -68,7 +96,13 @@ function createArrayMethodWrapper(
     switch (method) {
       case "push": {
         // push(items...) -> splice at end
+        // Track aliasCount for drafts being inserted
+        for (const arg of args) {
+          incAliasCount(arg)
+        }
+        // Store raw values in array (preserving aliasing in the draft)
         const result = arr.push(...args)
+        // Clone for the op (capture value at this moment)
         pushOp(proxyDraft, {
           kind: "splice",
           path: getPathOrThrow(proxyDraft),
@@ -85,6 +119,8 @@ function createArrayMethodWrapper(
         }
         // Get the element through the proxy to ensure it's a draft if draftable
         const returnValue = proxy[originalLength - 1]
+        // Track aliasCount for draft being removed
+        decAliasCount(arr[originalLength - 1])
         // Now perform the actual mutation
         arr.pop()
         pushOp(proxyDraft, {
@@ -103,6 +139,8 @@ function createArrayMethodWrapper(
         }
         // Get the element through the proxy to ensure it's a draft if draftable
         const returnValue = proxy[0]
+        // Track aliasCount for draft being removed
+        decAliasCount(arr[0])
         // Now perform the actual mutation
         arr.shift()
         pushOp(proxyDraft, {
@@ -116,7 +154,13 @@ function createArrayMethodWrapper(
       }
 
       case "unshift": {
+        // Track aliasCount for drafts being inserted
+        for (const arg of args) {
+          incAliasCount(arg)
+        }
+        // Store raw values in array (preserving aliasing in the draft)
         const result = arr.unshift(...args)
+        // Clone for the op (capture value at this moment)
         pushOp(proxyDraft, {
           kind: "splice",
           path: getPathOrThrow(proxyDraft),
@@ -141,11 +185,18 @@ function createArrayMethodWrapper(
         const returnValues: unknown[] = []
         for (let i = 0; i < deleteCount && index + i < originalLength; i++) {
           returnValues.push(proxy[index + i])
+          // Track aliasCount for drafts being removed
+          decAliasCount(arr[index + i])
         }
-        // Perform the actual mutation
+
+        // Track aliasCount for drafts being inserted
+        for (const insert of inserts) {
+          incAliasCount(insert)
+        }
+        // Store raw values in array (preserving aliasing in the draft)
         ;(arr.splice as (...args: unknown[]) => unknown[])(...args)
 
-        // Log the op with original args to capture intent
+        // Clone for the op (capture value at this moment)
         pushOp(proxyDraft, {
           kind: "splice",
           path: getPathOrThrow(proxyDraft),
@@ -158,61 +209,63 @@ function createArrayMethodWrapper(
 
       case "fill": {
         const fillValue = args[0]
-        const start = args[1] as number | undefined
-        const end = args[2] as number | undefined
+        const startArg = args[1] as number | undefined
+        const endArg = args[2] as number | undefined
 
-        // Perform the mutation
-        const result = arr.fill(fillValue, start, end)
+        const len = originalLength
+        const start = normalizeIndex(startArg, len, 0)
+        const end = normalizeIndex(endArg, len, len)
 
-        // Log the full array replacement to capture the effect
-        pushOp(proxyDraft, {
-          kind: "splice",
-          path: getPathOrThrow(proxyDraft),
-          index: 0,
-          deleteCount: originalLength,
-          inserts: arr.map(deepClone) as JSONValue[],
-        })
-        return result
+        // Use proxy splice to replace the range (handles aliasCount and generates splice op)
+        const fillCount = end - start
+        if (fillCount > 0) {
+          const fillValues = Array(fillCount).fill(fillValue)
+          proxy.splice(start, fillCount, ...fillValues)
+        }
+
+        return proxy
       }
 
       case "sort": {
         const compareFn = args[0] as ((a: unknown, b: unknown) => number) | undefined
-        const result = arr.sort(compareFn)
-        pushOp(proxyDraft, {
-          kind: "splice",
-          path: getPathOrThrow(proxyDraft),
-          index: 0,
-          deleteCount: originalLength,
-          inserts: arr.map(deepClone) as JSONValue[],
-        })
-        return result
+        // Sort a copy to get the sorted order, then use proxy splice
+        const sorted = [...arr].sort(compareFn)
+        if (originalLength > 0) {
+          proxy.splice(0, originalLength, ...sorted)
+        }
+        return proxy
       }
 
       case "reverse": {
-        const result = arr.reverse()
-        pushOp(proxyDraft, {
-          kind: "splice",
-          path: getPathOrThrow(proxyDraft),
-          index: 0,
-          deleteCount: originalLength,
-          inserts: arr.map(deepClone) as JSONValue[],
-        })
-        return result
+        // Reverse a copy to get the reversed order, then use proxy splice
+        const reversed = [...arr].reverse()
+        if (originalLength > 0) {
+          proxy.splice(0, originalLength, ...reversed)
+        }
+        return proxy
       }
 
       case "copyWithin": {
-        const target = args[0] as number
-        const start = args[1] as number | undefined
-        const end = args[2] as number | undefined
-        const result = arr.copyWithin(target, start as number, end)
-        pushOp(proxyDraft, {
-          kind: "splice",
-          path: getPathOrThrow(proxyDraft),
-          index: 0,
-          deleteCount: originalLength,
-          inserts: arr.map(deepClone) as JSONValue[],
-        })
-        return result
+        const targetArg = args[0] as number
+        const startArg = args[1] as number | undefined
+        const endArg = args[2] as number | undefined
+
+        const len = originalLength
+        const targetIdx = normalizeIndex(targetArg, len, 0)
+        const startIdx = normalizeIndex(startArg, len, 0)
+        const endIdx = normalizeIndex(endArg, len, len)
+
+        // Calculate how many elements will be copied
+        const copyCount = Math.min(endIdx - startIdx, len - targetIdx)
+
+        if (copyCount > 0) {
+          // Get the elements that will be copied (from the source range)
+          const elementsToCopy = arr.slice(startIdx, startIdx + copyCount)
+          // Use proxy splice to replace just the affected range
+          proxy.splice(targetIdx, copyCount, ...elementsToCopy)
+        }
+
+        return proxy
       }
 
       default:
@@ -347,7 +400,11 @@ const proxyHandler: ProxyHandler<ProxyDraft> = {
       target.assignedMap!.set(key, true)
     }
 
-    ;(target.copy as Record<PropertyKey, unknown>)[key] = value
+    // Track aliasCount and update copy
+    const copy = target.copy as Record<PropertyKey, unknown>
+    decAliasCount(copy[key])
+    incAliasCount(value)
+    copy[key] = value
 
     // Eager op logging for set operations
     if (target.type === DraftType.Array && opKey === "length") {
@@ -417,8 +474,9 @@ const proxyHandler: ProxyHandler<ProxyDraft> = {
       return proxyHandler.set!.call(this, target, key as string | symbol, undefined, target.proxy)
     }
 
-    // Check if property exists
-    const existed = peek(target.original, key) !== undefined || key in (target.original as object)
+    // Check if property exists and get its current value
+    const current = peek(latest(target), key)
+    const existed = current !== undefined || key in (target.original as object)
 
     // For objects, track deletion
     if (existed) {
@@ -432,13 +490,14 @@ const proxyHandler: ProxyHandler<ProxyDraft> = {
         path: getPathOrThrow(target),
         key: key,
       })
+
+      // Track aliasCount and delete from copy
+      const copy = target.copy as Record<PropertyKey, unknown>
+      decAliasCount(copy[key])
+      delete copy[key]
     } else {
       target.assignedMap = target.assignedMap ?? new Map()
       target.assignedMap.delete(key)
-    }
-
-    if (target.copy) {
-      delete (target.copy as Record<PropertyKey, unknown>)[key]
     }
     return true
   },
@@ -464,6 +523,7 @@ export function createDraft<T extends object>(options: {
     copy: null,
     proxy: null,
     finalities,
+    aliasCount: 1,
   }
 
   // Set key if provided

@@ -5,7 +5,7 @@
 
 import { createDraft, finalizeDraft } from "./draft"
 import type { Finalities, Op } from "./interface"
-import { isDraftable } from "./utils"
+import { getProxyDraft, isDraftable } from "./utils"
 
 /**
  * Create a draft and return a finalize function
@@ -19,6 +19,7 @@ export function draftify<T extends object>(
     handledSet: new WeakSet<object>(),
     draftsCache: new WeakSet<object>(),
     ops: [],
+    rootDraft: null, // Will be set by createDraft
   }
 
   // Check if state is draftable
@@ -31,6 +32,9 @@ export function draftify<T extends object>(
     parentDraft: null,
     finalities,
   })
+
+  // Set the root draft for multi-path detection
+  finalities.rootDraft = getProxyDraft(draft)
 
   return [
     draft,

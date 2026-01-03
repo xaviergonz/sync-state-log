@@ -5,11 +5,10 @@
  * - Removed tests for features we don't support (mark, strict, autoFreeze, rawReturn)
  */
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-import { createOps, isDraft } from "../../src/createOps"
+import { createOps, Draft, isDraft } from "../../src/createOps"
 
 // Helper to adapt mutative's `create` API to our `createOps` API
-function create<T extends object>(data: T, fn: (draft: T) => void): T {
+function create<T extends object>(data: T, fn: (draft: Draft<T>) => void): T {
   const { nextState } = createOps(data, fn)
   return nextState
 }
@@ -492,9 +491,12 @@ describe("shared ref", () => {
       draft.bar.a.push(draft.bar.b)
       draft.bar.b.x = 2
     })
+    // Aliasing is preserved in the draft - mutations affect all positions
+    // The pushed value reflects the mutation to x: 2
     expect(state).toEqual({
       bar: { a: [1, 2, 3, { x: 2 }], b: { x: 2 } },
     })
+    // Same object due to preserved aliasing
     expect(state.bar.a.slice(-1)[0]).toBe(state.bar.b)
   })
 
@@ -507,9 +509,12 @@ describe("shared ref", () => {
       draft.bar.a.unshift(draft.bar.b)
       draft.bar.b.x = 2
     })
+    // Aliasing is preserved in the draft - mutations affect all positions
+    // The unshifted value reflects the mutation to x: 2
     expect(state).toEqual({
       bar: { a: [{ x: 2 }, 1, 2, 3], b: { x: 2 } },
     })
+    // Same object due to preserved aliasing
     expect(state.bar.a[0]).toBe(state.bar.b)
   })
 
@@ -522,9 +527,12 @@ describe("shared ref", () => {
       draft.bar.a.splice(1, 1, draft.bar.b)
       draft.bar.b.x = 2
     })
+    // Aliasing is preserved in the draft - mutations affect all positions
+    // The spliced value reflects the mutation to x: 2
     expect(state).toEqual({
       bar: { a: [1, { x: 2 }, 3], b: { x: 2 } },
     })
+    // Same object due to preserved aliasing
     expect(state.bar.a[1]).toBe(state.bar.b)
   })
 })
